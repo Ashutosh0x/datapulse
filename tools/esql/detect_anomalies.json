@@ -1,0 +1,29 @@
+{
+  "id": "detect_anomalies",
+  "type": "esql",
+  "description": "Analyzes system metrics to detect anomalies in error rates and latency for a given service.",
+  "configuration": {
+    "query": "FROM metrics-system | WHERE service.name == \"${service_name}\" AND @timestamp > NOW() - ${time_window} | STATS error_rate = AVG(CAST(error_count AS DOUBLE)) / COUNT(*), p99_latency = PERCENTILE(latency, 99) BY service.name | WHERE error_rate > ${error_threshold} OR p99_latency > ${latency_threshold} | LOOKUP lookup-services ON service.name | KEEP service.name, error_rate, p99_latency, team, criticality",
+    "params": {
+      "service_name": {
+        "type": "string",
+        "description": "Name of the service to analyze"
+      },
+      "time_window": {
+        "type": "string",
+        "description": "Time window to analyze (e.g., 15m)",
+        "default": "15m"
+      },
+      "error_threshold": {
+        "type": "number",
+        "description": "Threshold for error rate (0-1)",
+        "default": 0.05
+      },
+      "latency_threshold": {
+        "type": "number",
+        "description": "Threshold for p99 latency in ms",
+        "default": 500
+      }
+    }
+  }
+}

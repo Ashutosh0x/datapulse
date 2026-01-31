@@ -1,0 +1,19 @@
+{
+    "id": "correlate_error_logs",
+    "type": "esql",
+    "description": "Searches for error logs for a specific service and enriches them with team ownership info.",
+    "configuration": {
+        "query": "FROM logs-application | WHERE service.name == \"${service_name}\" AND log.level == \"ERROR\" AND @timestamp > NOW() - ${time_window} | STATS count = COUNT(*) BY error.type, message | SORT count DESC | LIMIT 10 | LOOKUP lookup-services ON service.name | KEEP error.type, message, count, service.name, team",
+        "params": {
+            "service_name": {
+                "type": "string",
+                "description": "Name of the service"
+            },
+            "time_window": {
+                "type": "string",
+                "description": "Lookback period",
+                "default": "30m"
+            }
+        }
+    }
+}

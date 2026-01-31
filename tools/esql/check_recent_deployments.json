@@ -1,0 +1,19 @@
+{
+    "id": "check_recent_deployments",
+    "type": "esql",
+    "description": "Checks for recent deployments for a service that might be the cause of an incident.",
+    "configuration": {
+        "query": "FROM deployments-* | WHERE service.name == \"${service_name}\" AND @timestamp > NOW() - ${time_window} | SORT @timestamp DESC | KEEP @timestamp, version, author, description, service.name",
+        "params": {
+            "service_name": {
+                "type": "string",
+                "description": "Service name to check deployments for"
+            },
+            "time_window": {
+                "type": "string",
+                "description": "Time window to check",
+                "default": "1h"
+            }
+        }
+    }
+}

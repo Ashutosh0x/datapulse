@@ -1,0 +1,14 @@
+{
+    "id": "search_runbooks",
+    "type": "esql",
+    "description": "Searches for relevant runbooks using semantic or text search.",
+    "configuration": {
+        "query": "FROM runbooks-knowledge | WHERE MATCH(content, \"${query}\") | LIMIT 5 | KEEP title, url, content",
+        "params": {
+            "query": {
+                "type": "string",
+                "description": "The search query (incident description or error message)"
+            }
+        }
+    }
+}

@@ -1,0 +1,104 @@
+version: '3.8'
+
+services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    container_name: datapulse-es
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms1g -Xmx1g"
+    ports:
+      - "9200:9200"
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    networks:
+      - datapulse-net
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.11.0
+    container_name: datapulse-kibana
+    ports:
+      - "5601:5601"
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    depends_on:
+      - elasticsearch
+    networks:
+      - datapulse-net
+
+  redis:
+    image: redis:alpine
+    container_name: datapulse-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - datapulse-net
+
+  sentinel:
+    build:
+      context: ../../agents/sentinel
+    container_name: datapulse-sentinel
+    environment:
+      - ES_HOST=http://elasticsearch:9200
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - elasticsearch
+      - redis
+    networks:
+      - datapulse-net
+
+  analyst:
+    build:
+      context: ../../agents/analyst
+    container_name: datapulse-analyst
+    environment:
+      - ES_HOST=http://elasticsearch:9200
+      - REDIS_URL=redis://redis:6379/0
+      - KIBANA_URL=${KIBANA_URL}
+      - ELASTIC_API_KEY=${ELASTIC_API_KEY}
+      - ELASTIC_AGENT_ID=incident-investigator
+      - GATEWAY_URL=http://api-gateway:8000
+    depends_on:
+      - elasticsearch
+      - redis
+    networks:
+      - datapulse-net
+
+  resolver:
+    build:
+      context: ../../agents/resolver
+    container_name: datapulse-resolver
+    environment:
+      - ES_HOST=http://elasticsearch:9200
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - elasticsearch
+      - redis
+    networks:
+      - datapulse-net
+
+  api-gateway:
+    build:
+      context: ../../backend/api_gateway
+    container_name: datapulse-gateway
+    ports:
+      - "8000:8000"
+    environment:
+      - ES_HOST=http://elasticsearch:9200
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - elasticsearch
+      - redis
+      - sentinel
+      - analyst
+      - resolver
+    networks:
+      - datapulse-net
+
+volumes:
+  es_data:
+
+networks:
+  datapulse-net:
+    driver: bridge
