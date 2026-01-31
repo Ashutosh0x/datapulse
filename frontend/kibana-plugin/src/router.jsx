@@ -105,7 +105,8 @@ export const Router = () => {
                         </EuiFlexItem>
                         <EuiFlexItem grow={false}>
                             <EuiAvatar
-                                name="User"
+                                name={localStorage.getItem('dp_user_name') || 'User'}
+                                imageUrl={localStorage.getItem('dp_user_image')}
                                 size="s"
                                 color="#FEC514"
                                 onClick={() => setCurrentView('profile')}

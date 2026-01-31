@@ -36,6 +36,9 @@ import {
     EuiFilePicker,
     EuiGlobalToastList,
     EuiButtonIcon,
+    EuiForm,
+    EuiFormRow,
+    EuiFieldText,
 } from '@elastic/eui';
 
 export const ProfileApp = () => {
@@ -478,7 +481,7 @@ export const ProfileApp = () => {
                     <EuiModal onClose={() => setIsEditInfoModalOpen(false)}>
                         <EuiModalHeader><EuiModalHeaderTitle>Edit Personal Information</EuiModalHeaderTitle></EuiModalHeader>
                         <EuiModalBody>
-                            <EuiForm component="form">
+                            <EuiForm>
                                 <EuiFormRow label="Full Name">
                                     <EuiFieldText
                                         value={userName}
