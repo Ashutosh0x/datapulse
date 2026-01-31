@@ -8,6 +8,10 @@
 
 **DataPulse** is a next-generation "Human-in-the-Loop" incident response platform built for the **Elastic Hackathon**. It leverages the **Elastic Agent Builder**, **ES|QL**, and **Semantic Search** to transform raw logs into actionable remediation strategies autonomously.
 
+
+https://github.com/user-attachments/assets/514958f9-fac0-499f-921e-061b939ce70b
+
+
 ---
 
 ## Key Features
@@ -122,3 +126,4 @@ For full setup guides, agent configuration, and integration tutorials, see:
 - [ ] Multi-region incident correlation.
 
 *Built for the Elastic Hackathon 2026.*
+
