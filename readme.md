@@ -22,6 +22,52 @@
 
 ## Technical Architecture
 
+```mermaid
+graph TD
+    subgraph "User Interface"
+        UI["React & @elastic/eui Plugin"]
+    end
+
+    subgraph "Orchestration & Gateway"
+        Gateway["API Gateway (FastAPI)"]
+        Verify["HMAC Signature Verification"]
+    end
+
+    subgraph "Intelligent Agents"
+        Sentinel["Sentinel Agent (Monitoring)"]
+        Analyst["Analyst Agent (RCA)"]
+        Resolver["Resolver Agent (Remediation)"]
+    end
+
+    subgraph "Elastic Cloud Core"
+        ES[("Elasticsearch Storage")]
+        Builder["Agent Builder (Inference)"]
+        ESQL["ES|QL Tool Execution"]
+        ELSER["ELSER v2 (Vector Search)"]
+    end
+
+    subgraph "Integrations"
+        Slack["Slack (Interactive Alerts)"]
+        Jira["Jira (Lifecycle Sync)"]
+    end
+
+    %% Connections
+    Sentinel -- "Anomaly Detected" --> Gateway
+    Gateway -- "Store Metadata" --> ES
+    Gateway -- "Trigger RCA" --> Analyst
+    Analyst -- "Inference Request" --> Builder
+    Builder -- "Query Logs/Metrics" --> ESQL
+    ESQL -- "Aggregations" --> ES
+    Analyst -- "RCCA Report" --> Gateway
+    Gateway -- "Match Runbooks" --> Resolver
+    Resolver -- "Vector Search" --> ELSER
+    ELSER -- "Retrieve" --> ES
+    Resolver -- "Propose Action" --> Gateway
+    Gateway -- "Approval Gating" --> Slack
+    Gateway -- "Incident Sync" --> Jira
+    Gateway -- "Real-time State" --> UI
+```
+
 DataPulse is built on a distributed agent architecture:
 
 1.  **Sentinel (Detector):** High-frequency log analysis to detect anomalies.
