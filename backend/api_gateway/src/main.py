@@ -1,8 +1,8 @@
 import os
-import sys
-sys.path.append(os.path.dirname(__file__) + "/../../../integrations/mcp-adapters")
 
 from fastapi import FastAPI, HTTPException, Request, BackgroundTasks, Header
+from jira_adapter import JiraAdapter
+from slack_adapter import SlackAdapter
 from pydantic import BaseModel
 from elasticsearch import AsyncElasticsearch
 from loguru import logger
@@ -34,8 +34,7 @@ def get_slack_adapter():
     global _slack_adapter
     if _slack_adapter is None:
         try:
-            from slack_adapter import slack_adapter
-            _slack_adapter = slack_adapter.SlackAdapter()
+            _slack_adapter = SlackAdapter()
         except Exception as e:
             logger.warning(f"Slack adapter not available: {e}")
     return _slack_adapter
@@ -44,11 +43,20 @@ def get_jira_adapter():
     global _jira_adapter
     if _jira_adapter is None:
         try:
-            from jira_adapter import jira_adapter
-            _jira_adapter = jira_adapter.JiraAdapter()
+            _jira_adapter = JiraAdapter()
         except Exception as e:
             logger.warning(f"Jira adapter not available: {e}")
     return _jira_adapter
+
+
+
+@app.on_event("startup")
+async def log_adapter_startup_status():
+    slack_loaded = get_slack_adapter() is not None
+    jira_loaded = get_jira_adapter() is not None
+    logger.info(
+        f"Adapter startup self-check -> slack_loaded={slack_loaded}, jira_loaded={jira_loaded}"
+    )
 
 # --- Models ---
 class MetricData(BaseModel):
