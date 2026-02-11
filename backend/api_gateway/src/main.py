@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import List, Optional, Dict, Any
 import hashlib
 import hmac
+from contextlib import suppress
 
 app = FastAPI(title="DataPulse API Gateway", version="1.0.0")
 
@@ -29,6 +30,45 @@ INDEX_AUDIT = os.getenv("INDEX_AUDIT", ".audit-datapulse-000001")
 # Lazy load integrations
 _slack_adapter = None
 _jira_adapter = None
+
+
+def _env_flag_is_true(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def is_production_mode() -> bool:
+    return os.getenv("ENVIRONMENT", "development").strip().lower() in {"prod", "production"}
+
+
+def validate_slack_webhook_configuration() -> bool:
+    signing_secret = os.getenv("SLACK_SIGNING_SECRET")
+    allow_insecure = _env_flag_is_true("ALLOW_INSECURE_SLACK_WEBHOOK")
+    production_mode = is_production_mode()
+
+    if signing_secret:
+        logger.info("Slack webhook signature verification is enabled")
+        return True
+
+    if production_mode:
+        logger.error(
+            "SLACK_SIGNING_SECRET is missing while ENVIRONMENT is production - "
+            "Slack webhooks will be rejected"
+        )
+        return False
+
+    if allow_insecure:
+        logger.warning(
+            "ALLOW_INSECURE_SLACK_WEBHOOK is enabled in non-production mode - "
+            "Slack webhook requests will bypass signature verification (INSECURE)"
+        )
+        return True
+
+    logger.error(
+        "SLACK_SIGNING_SECRET is not configured and insecure bypass is disabled - "
+        "Slack webhook requests will be rejected. Set SLACK_SIGNING_SECRET or "
+        "ALLOW_INSECURE_SLACK_WEBHOOK=true for local development only"
+    )
+    return False
 
 def get_slack_adapter():
     global _slack_adapter
@@ -76,6 +116,11 @@ class AgentReport(BaseModel):
     timestamp: Optional[str] = None
     rcca: Optional[Dict[str, Any]] = None
     proposals: Optional[List[Dict[str, Any]]] = None
+
+
+@app.on_event("startup")
+async def startup_validation():
+    validate_slack_webhook_configuration()
 
 # --- Endpoints ---
 
@@ -177,26 +222,33 @@ def verify_slack_signature(body: bytes, signature: str, headers: Dict[str, str])
     """Implement Slack signature verification using HMAC-SHA256"""
     signing_secret = os.getenv("SLACK_SIGNING_SECRET")
     if not signing_secret:
-        logger.warning("SLACK_SIGNING_SECRET not set - skipping validation (INSECURE)")
-        return True
-    
+        if validate_slack_webhook_configuration():
+            return True
+        return False
+
+    if not signature:
+        return False
+
     timestamp = headers.get("X-Slack-Request-Timestamp")
     if not timestamp:
         return False
-        
-    # Prevent replay attacks
-    if abs(int(timestamp) - int(datetime.now().timestamp())) > 60 * 5:
-        return False
-        
-    sig_basestring = f"v0:{timestamp}:{body.decode('utf-8')}"
-    req_hash = hmac.new(
-        signing_secret.encode('utf-8'),
-        sig_basestring.encode('utf-8'),
-        hashlib.sha256
-    ).hexdigest()
-    
-    expected_signature = f"v0={req_hash}"
-    return hmac.compare_digest(expected_signature, signature)
+
+    with suppress(ValueError):
+        timestamp_int = int(timestamp)
+        # Prevent replay attacks
+        if abs(timestamp_int - int(datetime.now().timestamp())) > 60 * 5:
+            return False
+        sig_basestring = f"v0:{timestamp}:{body.decode('utf-8')}"
+        req_hash = hmac.new(
+            signing_secret.encode('utf-8'),
+            sig_basestring.encode('utf-8'),
+            hashlib.sha256
+        ).hexdigest()
+
+        expected_signature = f"v0={req_hash}"
+        return hmac.compare_digest(expected_signature, signature)
+
+    return False
 
 # --- Helpers ---
 
