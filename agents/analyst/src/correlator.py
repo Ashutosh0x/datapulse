@@ -6,6 +6,7 @@ NO MOCK DATA - Uses Agent Builder tools to query real Elasticsearch data.
 """
 
 import os
+import json
 from datetime import datetime
 from typing import Dict, Any, List
 from loguru import logger
@@ -21,6 +22,7 @@ es = AsyncElasticsearch(hosts=[ES_HOST])
 
 # API Gateway URL for reporting back
 GATEWAY_URL = os.getenv("GATEWAY_URL", "http://api-gateway:8000")
+RCCA_EVIDENCE_SNIPPET_MAX_CHARS = int(os.getenv("RCCA_EVIDENCE_SNIPPET_MAX_CHARS", "200"))
 
 
 async def run_rca_investigation(incident_id: str, service: str, detected_at: str):
@@ -163,19 +165,28 @@ def extract_rcca_from_response(
     Returns:
         Structured RCA dict
     """
-    # Collect evidence from tool results
+    def _serialize_result_snippet(result: Any) -> str:
+        """Serialize a result safely and truncate to avoid oversized documents."""
+        serialized = json.dumps(result, default=str, separators=(",", ":"))
+        if len(serialized) <= RCCA_EVIDENCE_SNIPPET_MAX_CHARS:
+            return serialized
+        return serialized[:RCCA_EVIDENCE_SNIPPET_MAX_CHARS] + "..."
+
+    # Collect evidence from tool_call steps that have attached results
     evidence = []
     
     for round_data in rounds:
         for step in round_data.get("steps", []):
-            if step["type"] == "tool_result" and "results" in step:
+            if step.get("type") == "tool_call" and "results" in step:
                 for result in step["results"]:
-                    if isinstance(result, dict) and "data" in result:
-                        evidence.append({
+                    evidence.append(
+                        {
                             "type": "tool_result",
                             "tool_id": step.get("tool_id"),
-                            "snippet": str(result["data"])[:200]
-                        })
+                            "execution_time_ms": step.get("execution_time_ms"),
+                            "snippet": _serialize_result_snippet(result),
+                        }
+                    )
     
     return {
         "root_cause": message[:500],  # First 500 chars as summary
