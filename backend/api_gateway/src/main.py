@@ -112,9 +112,23 @@ async def create_incident(req: CreateIncidentRequest, background_tasks: Backgrou
     # 1. Save to ES
     try:
         await es.index(index=INDEX_INCIDENTS, id=incident_id, document=doc)
-        logger.info(f"Created incident {incident_id} in {INDEX_INCIDENTS}")
+        logger.bind(correlation_id=req.correlation_id, incident_id=incident_id).info(
+            f"Created incident {incident_id} in {INDEX_INCIDENTS}"
+        )
     except Exception as e:
-        logger.error(f"Failed to save incident: {e}")
+        error_payload = {
+            "code": "INCIDENT_PERSISTENCE_FAILED",
+            "message": "Failed to persist incident in datastore",
+            "correlation_id": req.correlation_id,
+            "incident_id": incident_id,
+            "index": INDEX_INCIDENTS,
+            "exception_type": type(e).__name__,
+        }
+        logger.bind(correlation_id=req.correlation_id, incident_id=incident_id).error(
+            "Incident persistence failed",
+            error_payload={**error_payload, "exception": str(e)},
+        )
+        raise HTTPException(status_code=503, detail=error_payload)
     
     # 2. Trigger integrations  
     background_tasks.add_task(notify_integrations, doc)
