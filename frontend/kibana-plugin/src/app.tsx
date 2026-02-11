@@ -33,6 +33,7 @@ import {
   EuiToolTip,
   EuiTextColor,
   EuiButtonEmpty,
+  EuiCallOut,
 } from '@elastic/eui';
 import axios from 'axios';
 
@@ -72,6 +73,7 @@ export const DataPulseApp = () => {
   const [showAgent, setShowAgent] = useState(false);
   const [timeRange, setTimeRange] = useState({ start: 'now-7d', end: 'now' });
   const [searchValue, setSearchValue] = useState('');
+  const [approvalMessage, setApprovalMessage] = useState<{ type: 'success' | 'danger' | 'warning'; title: string; message: string } | null>(null);
 
   useEffect(() => {
     fetchLatestIncident();
@@ -142,10 +144,43 @@ export const DataPulseApp = () => {
   };
 
   const approveAction = async (actionId: string) => {
+    if (!incident) {
+      return;
+    }
+
+    setApprovalMessage(null);
+
     try {
-      await axios.post(`${API_BASE}/api/datapulse/v1/incidents/${incident!.incident_id}/actions/${actionId}/approve`);
+      const response = await axios.post(`${API_BASE}/api/datapulse/v1/incidents/${incident.incident_id}/actions/${actionId}/approve`);
+      setApprovalMessage({
+        type: 'success',
+        title: 'Approval submitted',
+        message: `Action ${response.data.action_id} approved successfully.`
+      });
       console.log(`Action ${actionId} approved`);
-    } catch (error) {
+    } catch (error: any) {
+      const status = error?.response?.status;
+
+      if (status === 404) {
+        setApprovalMessage({
+          type: 'warning',
+          title: 'Action or incident not found',
+          message: 'The remediation item no longer exists. Refresh incident data and try again.'
+        });
+      } else if (status === 409) {
+        setApprovalMessage({
+          type: 'warning',
+          title: 'Action already approved',
+          message: 'This remediation has already been approved by another responder.'
+        });
+      } else {
+        setApprovalMessage({
+          type: 'danger',
+          title: 'Approval failed',
+          message: 'The server could not process the approval request. Please try again in a moment.'
+        });
+      }
+
       console.error("Failed to approve action", error);
     }
   };
@@ -482,6 +517,15 @@ export const DataPulseApp = () => {
                   <h4>Remedeation Steps</h4>
                 </EuiTitle>
                 <EuiSpacer size="m" />
+
+                {approvalMessage && (
+                  <>
+                    <EuiCallOut title={approvalMessage.title} color={approvalMessage.type} iconType="iInCircle">
+                      <p>{approvalMessage.message}</p>
+                    </EuiCallOut>
+                    <EuiSpacer size="m" />
+                  </>
+                )}
 
                 {incident?.resolver_proposals?.map((proposal, idx) => (
                   <div key={proposal.action_id} style={{ marginBottom: 8 }}>
