@@ -80,7 +80,8 @@ services:
 
   api-gateway:
     build:
-      context: ../../backend/api_gateway
+      context: ../../
+      dockerfile: backend/api_gateway/Dockerfile
     container_name: datapulse-gateway
     ports:
       - "8000:8000"

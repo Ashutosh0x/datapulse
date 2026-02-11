@@ -1,17 +1,27 @@
 import os
-import sys
-sys.path.append(os.path.dirname(__file__) + "/../../../integrations/mcp-adapters")
+import uuid
+import hashlib
+import hmac
+import json
+from datetime import datetime
+from typing import List, Optional, Dict, Any
 
 from fastapi import FastAPI, HTTPException, Request, BackgroundTasks, Header
 from pydantic import BaseModel
 from elasticsearch import AsyncElasticsearch, NotFoundError
 from loguru import logger
 import httpx
-import uuid
-from datetime import datetime
-from typing import List, Optional, Dict, Any
-import hashlib
-import hmac
+
+# Use the new package structure
+try:
+    from jira_adapter.jira_adapter import JiraAdapter
+    from slack_adapter.slack_adapter import SlackAdapter
+except ImportError:
+    # Fallback for local development if not installed as package
+    import sys
+    sys.path.append(os.path.join(os.path.dirname(__file__), "../../../integrations/mcp-adapters"))
+    from jira_adapter.jira_adapter import JiraAdapter
+    from slack_adapter.slack_adapter import SlackAdapter
 
 app = FastAPI(title="DataPulse API Gateway", version="1.0.0")
 
@@ -34,8 +44,7 @@ def get_slack_adapter():
     global _slack_adapter
     if _slack_adapter is None:
         try:
-            from slack_adapter import slack_adapter
-            _slack_adapter = slack_adapter.SlackAdapter()
+            _slack_adapter = SlackAdapter()
         except Exception as e:
             logger.warning(f"Slack adapter not available: {e}")
     return _slack_adapter
@@ -44,8 +53,7 @@ def get_jira_adapter():
     global _jira_adapter
     if _jira_adapter is None:
         try:
-            from jira_adapter import jira_adapter
-            _jira_adapter = jira_adapter.JiraAdapter()
+            _jira_adapter = JiraAdapter()
         except Exception as e:
             logger.warning(f"Jira adapter not available: {e}")
     return _jira_adapter
@@ -77,7 +85,6 @@ class AgentReport(BaseModel):
     rcca: Optional[Dict[str, Any]] = None
     proposals: Optional[List[Dict[str, Any]]] = None
 
-
 def serialize_incident(incident_doc: Dict[str, Any], fallback_id: Optional[str] = None) -> Dict[str, Any]:
     """Normalize incident records returned by API list/detail endpoints."""
     normalized = dict(incident_doc)
@@ -85,13 +92,11 @@ def serialize_incident(incident_doc: Dict[str, Any], fallback_id: Optional[str] 
         normalized["incident_id"] = fallback_id
     return normalized
 
-
 def _find_action(proposals: List[Dict[str, Any]], action_id: str) -> Optional[Dict[str, Any]]:
     for proposal in proposals:
         if proposal.get("action_id") == action_id:
             return proposal
     return None
-
 
 # --- Endpoints ---
 
@@ -126,7 +131,6 @@ async def get_incident(incident_id: str):
         return serialize_incident(resp["_source"], fallback_id=resp.get("_id"))
     except Exception:
         raise HTTPException(status_code=404, detail="Incident not found")
-
 
 @app.get("/api/datapulse/v1/incidents")
 async def list_incidents(
@@ -208,7 +212,6 @@ async def receive_report(report: AgentReport, background_tasks: BackgroundTasks)
 
     return {"status": "processed"}
 
-
 @app.post("/api/datapulse/v1/incidents/{incident_id}/actions/{action_id}/approve")
 async def approve_action(
     incident_id: str,
@@ -287,8 +290,6 @@ async def slack_webhook(request: Request, x_slack_signature: Optional[str] = Hea
     # Parse Slack payload
     form_data = await request.form()
     payload_str = form_data.get("payload", "{}")
-    
-    import json
     payload = json.loads(payload_str)
     
     # Extract action value: "approve|INC-XXX|ACTION-YYY"
@@ -415,4 +416,3 @@ async def metrics():
     except Exception as e:
         logger.error(f"Metrics collection failed: {e}")
         return {"incidents_total": -1, "es_connected": False}
-
