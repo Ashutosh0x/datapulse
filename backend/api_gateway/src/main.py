@@ -316,13 +316,42 @@ async def slack_webhook(request: Request, x_slack_signature: Optional[str] = Hea
     
     if len(parts) >= 3:
         action_type, incident_id, action_id = parts[0], parts[1], parts[2]
-        
-        if action_type == "approve":
-            logger.info(f"Approving action {action_id} for incident {incident_id}")
-            # Execute action approval logic here
-            # For now, just log
-        
+
+        if not action_id:
+            logger.warning(f"Received Slack action callback without action_id for incident {incident_id}")
+            return {"status": "invalid_action"}
+
+        if action_type in {"approve", "reject"}:
+            logger.info(f"Received {action_type} for action {action_id} incident {incident_id}")
+            await persist_action_decision(incident_id, action_id, action_type, payload)
+
     return {"status": "processed"}
+
+
+async def persist_action_decision(incident_id: str, action_id: str, decision: str, payload: Dict[str, Any]):
+    """Persist Slack approval decisions for auditable action tracing."""
+    actor = payload.get("user", {}).get("id")
+    decision_doc = {
+        "event_type": "action_decision",
+        "incident_id": incident_id,
+        "action_id": action_id,
+        "decision": decision,
+        "actor": actor,
+        "source": "slack",
+        "recorded_at": datetime.now().isoformat(),
+    }
+
+    try:
+        await es.index(
+            index=INDEX_AUDIT,
+            id=f"{incident_id}:{action_id}",
+            document=decision_doc,
+        )
+        logger.info(
+            f"Persisted {decision} decision for incident={incident_id} action={action_id}"
+        )
+    except Exception as e:
+        logger.error(f"Failed to persist action decision for {incident_id}/{action_id}: {e}")
 
 def verify_slack_signature(body: bytes, signature: str, headers: Dict[str, str]) -> bool:
     """Implement Slack signature verification using HMAC-SHA256"""

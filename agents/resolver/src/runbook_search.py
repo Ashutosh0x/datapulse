@@ -1,4 +1,6 @@
 import os
+import json
+import hashlib
 import httpx
 from elasticsearch import AsyncElasticsearch
 from loguru import logger
@@ -33,7 +35,7 @@ async def resolve_incident(incident_id: str, rcca_context: dict):
     runbooks = await search_runbooks(query)
     
     # Synthesize Actions
-    actions = synthesize_actions(runbooks, top_hypothesis)
+    actions = synthesize_actions(incident_id, runbooks, top_hypothesis)
 
     
     # Report Proposals
@@ -60,7 +62,15 @@ async def search_runbooks(query_text: str):
         logger.error(f"Error searching runbooks: {e}")
     return results
 
-def synthesize_actions(runbooks, hypothesis):
+def generate_action_id(incident_id: str, action: dict, sequence: int) -> str:
+    """Generate a deterministic action ID for auditability across systems."""
+    canonical_action = json.dumps(action, sort_keys=True, default=str)
+    digest_input = f"{incident_id}|{sequence}|{canonical_action}".encode("utf-8")
+    digest = hashlib.sha256(digest_input).hexdigest()[:16].upper()
+    return f"ACT-{digest}"
+
+
+def synthesize_actions(incident_id, runbooks, hypothesis):
     actions = []
     
     # Heuristic based on hypothesis type
@@ -90,6 +100,9 @@ def synthesize_actions(runbooks, hypothesis):
             "requires_approval": False
         })
         
+    for idx, action in enumerate(actions):
+        action["action_id"] = generate_action_id(incident_id, action, idx)
+
     return actions
 
 async def submit_proposals(incident_id, actions):
