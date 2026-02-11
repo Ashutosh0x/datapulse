@@ -77,6 +77,14 @@ class AgentReport(BaseModel):
     rcca: Optional[Dict[str, Any]] = None
     proposals: Optional[List[Dict[str, Any]]] = None
 
+
+def serialize_incident(incident_doc: Dict[str, Any], fallback_id: Optional[str] = None) -> Dict[str, Any]:
+    """Normalize incident records returned by API list/detail endpoints."""
+    normalized = dict(incident_doc)
+    if "incident_id" not in normalized and fallback_id:
+        normalized["incident_id"] = fallback_id
+    return normalized
+
 # --- Endpoints ---
 
 @app.post("/api/datapulse/v1/incidents", status_code=201)
@@ -107,9 +115,63 @@ async def create_incident(req: CreateIncidentRequest, background_tasks: Backgrou
 async def get_incident(incident_id: str):
     try:
         resp = await es.get(index=INDEX_INCIDENTS, id=incident_id)
-        return resp["_source"]
+        return serialize_incident(resp["_source"], fallback_id=resp.get("_id"))
     except Exception:
         raise HTTPException(status_code=404, detail="Incident not found")
+
+
+@app.get("/api/datapulse/v1/incidents")
+async def list_incidents(
+    page: int = 1,
+    page_size: int = 20,
+    severity: Optional[str] = None,
+    status: Optional[str] = None,
+    sort_by: str = "created_at",
+    sort_order: str = "desc",
+):
+    if page < 1:
+        raise HTTPException(status_code=400, detail="page must be >= 1")
+    if page_size < 1 or page_size > 100:
+        raise HTTPException(status_code=400, detail="page_size must be between 1 and 100")
+    if sort_order not in {"asc", "desc"}:
+        raise HTTPException(status_code=400, detail="sort_order must be either 'asc' or 'desc'")
+
+    filters = []
+    if severity:
+        filters.append({"term": {"severity.keyword": severity}})
+    if status:
+        filters.append({"term": {"status.keyword": status}})
+
+    query = {"bool": {"filter": filters}} if filters else {"match_all": {}}
+    start = (page - 1) * page_size
+
+    try:
+        resp = await es.search(
+            index=INDEX_INCIDENTS,
+            from_=start,
+            size=page_size,
+            query=query,
+            sort=[{sort_by: {"order": sort_order, "missing": "_last"}}],
+            track_total_hits=True,
+        )
+    except Exception as e:
+        logger.error(f"Failed to list incidents: {e}")
+        raise HTTPException(status_code=500, detail="Failed to list incidents")
+
+    hits = resp.get("hits", {})
+    total_hits = hits.get("total", {})
+    total = total_hits.get("value", 0) if isinstance(total_hits, dict) else int(total_hits)
+    records = [
+        serialize_incident(hit.get("_source", {}), fallback_id=hit.get("_id"))
+        for hit in hits.get("hits", [])
+    ]
+
+    return {
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+        "records": records,
+    }
 
 @app.post("/agent/report")
 async def receive_report(report: AgentReport, background_tasks: BackgroundTasks):
