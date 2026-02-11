@@ -5,6 +5,7 @@ import hmac
 import json
 from datetime import datetime
 from typing import List, Optional, Dict, Any
+from contextlib import suppress
 
 from fastapi import FastAPI, HTTPException, Request, BackgroundTasks, Header
 from pydantic import BaseModel
@@ -40,6 +41,46 @@ INDEX_AUDIT = os.getenv("INDEX_AUDIT", ".audit-datapulse-000001")
 _slack_adapter = None
 _jira_adapter = None
 
+
+def _env_flag_is_true(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def is_production_mode() -> bool:
+    return os.getenv("ENVIRONMENT", "development").strip().lower() in {"prod", "production"}
+
+
+def validate_slack_webhook_configuration() -> bool:
+    signing_secret = os.getenv("SLACK_SIGNING_SECRET")
+    allow_insecure = _env_flag_is_true("ALLOW_INSECURE_SLACK_WEBHOOK")
+    production_mode = is_production_mode()
+
+    if signing_secret:
+        logger.info("Slack webhook signature verification is enabled")
+        return True
+
+    if production_mode:
+        logger.error(
+            "SLACK_SIGNING_SECRET is missing while ENVIRONMENT is production - "
+            "Slack webhooks will be rejected"
+        )
+        return False
+
+    if allow_insecure:
+        logger.warning(
+            "ALLOW_INSECURE_SLACK_WEBHOOK is enabled in non-production mode - "
+            "Slack webhook requests will bypass signature verification (INSECURE)"
+        )
+        return True
+
+    logger.error(
+        "SLACK_SIGNING_SECRET is not configured and insecure bypass is disabled - "
+        "Slack webhook requests will be rejected. Set SLACK_SIGNING_SECRET or "
+        "ALLOW_INSECURE_SLACK_WEBHOOK=true for local development only"
+    )
+    return False
+
+
 def get_slack_adapter():
     global _slack_adapter
     if _slack_adapter is None:
@@ -48,6 +89,7 @@ def get_slack_adapter():
         except Exception as e:
             logger.warning(f"Slack adapter not available: {e}")
     return _slack_adapter
+
 
 def get_jira_adapter():
     global _jira_adapter
@@ -58,16 +100,19 @@ def get_jira_adapter():
             logger.warning(f"Jira adapter not available: {e}")
     return _jira_adapter
 
+
 # --- Models ---
 class MetricData(BaseModel):
     error_rate: float
     p99_latency_ms: float
+
 
 class Evidence(BaseModel):
     type: str
     ref: Optional[str] = None
     text: Optional[str] = None
     snippet: Optional[str] = None
+
 
 class CreateIncidentRequest(BaseModel):
     source: str
@@ -78,12 +123,19 @@ class CreateIncidentRequest(BaseModel):
     evidence: List[Evidence]
     correlation_id: str
 
+
 class AgentReport(BaseModel):
     incident_id: str
     agent: str
     timestamp: Optional[str] = None
     rcca: Optional[Dict[str, Any]] = None
     proposals: Optional[List[Dict[str, Any]]] = None
+
+
+@app.on_event("startup")
+async def startup_validation():
+    validate_slack_webhook_configuration()
+
 
 def serialize_incident(incident_doc: Dict[str, Any], fallback_id: Optional[str] = None) -> Dict[str, Any]:
     """Normalize incident records returned by API list/detail endpoints."""
@@ -92,11 +144,13 @@ def serialize_incident(incident_doc: Dict[str, Any], fallback_id: Optional[str] 
         normalized["incident_id"] = fallback_id
     return normalized
 
+
 def _find_action(proposals: List[Dict[str, Any]], action_id: str) -> Optional[Dict[str, Any]]:
     for proposal in proposals:
         if proposal.get("action_id") == action_id:
             return proposal
     return None
+
 
 # --- Endpoints ---
 
@@ -138,6 +192,7 @@ async def create_incident(req: CreateIncidentRequest, background_tasks: Backgrou
     
     return {"incident_id": incident_id, "status": "open"}
 
+
 @app.get("/api/datapulse/v1/incidents/{incident_id}")
 async def get_incident(incident_id: str):
     try:
@@ -145,6 +200,7 @@ async def get_incident(incident_id: str):
         return serialize_incident(resp["_source"], fallback_id=resp.get("_id"))
     except Exception:
         raise HTTPException(status_code=404, detail="Incident not found")
+
 
 @app.get("/api/datapulse/v1/incidents")
 async def list_incidents(
@@ -199,6 +255,7 @@ async def list_incidents(
         "records": records,
     }
 
+
 @app.post("/agent/report")
 async def receive_report(report: AgentReport, background_tasks: BackgroundTasks):
     logger.info(f"Received report from {report.agent} for {report.incident_id}")
@@ -225,6 +282,7 @@ async def receive_report(report: AgentReport, background_tasks: BackgroundTasks)
         background_tasks.add_task(send_action_approvals, report.incident_id, report.proposals)
 
     return {"status": "processed"}
+
 
 @app.post("/api/datapulse/v1/incidents/{incident_id}/actions/{action_id}/approve")
 async def approve_action(
@@ -291,6 +349,7 @@ async def approve_action(
         "timestamp": timestamp,
     }
 
+
 @app.post("/api/datapulse/v1/webhook/integrations/slack")
 async def slack_webhook(request: Request, x_slack_signature: Optional[str] = Header(None)):
     """Handle Slack interactive button callbacks"""
@@ -353,30 +412,39 @@ async def persist_action_decision(incident_id: str, action_id: str, decision: st
     except Exception as e:
         logger.error(f"Failed to persist action decision for {incident_id}/{action_id}: {e}")
 
+
 def verify_slack_signature(body: bytes, signature: str, headers: Dict[str, str]) -> bool:
     """Implement Slack signature verification using HMAC-SHA256"""
     signing_secret = os.getenv("SLACK_SIGNING_SECRET")
     if not signing_secret:
-        logger.warning("SLACK_SIGNING_SECRET not set - skipping validation (INSECURE)")
-        return True
-    
+        if validate_slack_webhook_configuration():
+            return True
+        return False
+
+    if not signature:
+        return False
+
     timestamp = headers.get("X-Slack-Request-Timestamp")
     if not timestamp:
         return False
-        
-    # Prevent replay attacks
-    if abs(int(timestamp) - int(datetime.now().timestamp())) > 60 * 5:
-        return False
-        
-    sig_basestring = f"v0:{timestamp}:{body.decode('utf-8')}"
-    req_hash = hmac.new(
-        signing_secret.encode('utf-8'),
-        sig_basestring.encode('utf-8'),
-        hashlib.sha256
-    ).hexdigest()
-    
-    expected_signature = f"v0={req_hash}"
-    return hmac.compare_digest(expected_signature, signature)
+
+    with suppress(ValueError):
+        timestamp_int = int(timestamp)
+        # Prevent replay attacks
+        if abs(timestamp_int - int(datetime.now().timestamp())) > 60 * 5:
+            return False
+        sig_basestring = f"v0:{timestamp}:{body.decode('utf-8')}"
+        req_hash = hmac.new(
+            signing_secret.encode('utf-8'),
+            sig_basestring.encode('utf-8'),
+            hashlib.sha256
+        ).hexdigest()
+
+        expected_signature = f"v0={req_hash}"
+        return hmac.compare_digest(expected_signature, signature)
+
+    return False
+
 
 # --- Helpers ---
 
@@ -405,6 +473,7 @@ async def notify_integrations(incident: Dict[str, Any]):
         except Exception as e:
             logger.error(f"Jira ticket creation failed: {e}")
 
+
 async def send_action_approvals(incident_id: str, proposals: List[Dict[str, Any]]):
     """Send action approval requests to Slack"""
     slack = get_slack_adapter()
@@ -418,6 +487,7 @@ async def send_action_approvals(incident_id: str, proposals: List[Dict[str, Any]
             except Exception as e:
                 logger.error(f"Failed to send approval request: {e}")
 
+
 async def trigger_analyst(incident_id, service, detected_at):
     try:
         async with httpx.AsyncClient() as client:
@@ -429,6 +499,7 @@ async def trigger_analyst(incident_id, service, detected_at):
     except Exception as e:
         logger.error(f"Failed to trigger analyst: {e}")
 
+
 async def trigger_resolver(incident_id, rcca_context):
     try:
         async with httpx.AsyncClient() as client:
@@ -439,9 +510,11 @@ async def trigger_resolver(incident_id, rcca_context):
     except Exception as e:
         logger.error(f"Failed to trigger resolver: {e}")
 
+
 @app.get("/healthz")
 def health():
     return {"status": "ok"}
+
 
 @app.get("/metrics")
 async def metrics():
