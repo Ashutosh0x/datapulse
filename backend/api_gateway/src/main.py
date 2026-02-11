@@ -4,7 +4,7 @@ sys.path.append(os.path.dirname(__file__) + "/../../../integrations/mcp-adapters
 
 from fastapi import FastAPI, HTTPException, Request, BackgroundTasks, Header
 from pydantic import BaseModel
-from elasticsearch import AsyncElasticsearch
+from elasticsearch import AsyncElasticsearch, NotFoundError
 from loguru import logger
 import httpx
 import uuid
@@ -84,6 +84,14 @@ def serialize_incident(incident_doc: Dict[str, Any], fallback_id: Optional[str] 
     if "incident_id" not in normalized and fallback_id:
         normalized["incident_id"] = fallback_id
     return normalized
+
+
+def _find_action(proposals: List[Dict[str, Any]], action_id: str) -> Optional[Dict[str, Any]]:
+    for proposal in proposals:
+        if proposal.get("action_id") == action_id:
+            return proposal
+    return None
+
 
 # --- Endpoints ---
 
@@ -199,6 +207,72 @@ async def receive_report(report: AgentReport, background_tasks: BackgroundTasks)
         background_tasks.add_task(send_action_approvals, report.incident_id, report.proposals)
 
     return {"status": "processed"}
+
+
+@app.post("/api/datapulse/v1/incidents/{incident_id}/actions/{action_id}/approve")
+async def approve_action(
+    incident_id: str,
+    action_id: str,
+    x_user_id: Optional[str] = Header(default="system"),
+):
+    try:
+        resp = await es.get(index=INDEX_INCIDENTS, id=incident_id)
+    except NotFoundError:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    except Exception as e:
+        logger.error(f"Failed to fetch incident for approval: {e}")
+        raise HTTPException(status_code=500, detail="Failed to process approval")
+
+    incident_doc = resp.get("_source", {})
+    proposals = incident_doc.get("resolver_proposals") or []
+    proposal = _find_action(proposals, action_id)
+
+    if not proposal:
+        raise HTTPException(status_code=404, detail="Action not found")
+
+    if proposal.get("status") == "approved":
+        raise HTTPException(status_code=409, detail="Action already approved")
+
+    timestamp = datetime.now().isoformat()
+    approved_by = x_user_id or "system"
+
+    proposal["status"] = "approved"
+    proposal["approved_by"] = approved_by
+    proposal["approved_at"] = timestamp
+
+    approvals = incident_doc.get("action_approvals") or []
+    approvals.append(
+        {
+            "incident_id": incident_id,
+            "action_id": action_id,
+            "status": "approved",
+            "approved_by": approved_by,
+            "timestamp": timestamp,
+        }
+    )
+
+    try:
+        await es.update(
+            index=INDEX_INCIDENTS,
+            id=incident_id,
+            doc={
+                "resolver_proposals": proposals,
+                "action_approvals": approvals,
+            },
+        )
+    except NotFoundError:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    except Exception as e:
+        logger.error(f"Failed to persist action approval: {e}")
+        raise HTTPException(status_code=500, detail="Failed to persist approval")
+
+    return {
+        "incident_id": incident_id,
+        "action_id": action_id,
+        "status": "approved",
+        "approved_by": approved_by,
+        "timestamp": timestamp,
+    }
 
 @app.post("/api/datapulse/v1/webhook/integrations/slack")
 async def slack_webhook(request: Request, x_slack_signature: Optional[str] = Header(None)):

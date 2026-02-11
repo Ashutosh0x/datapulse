@@ -14,6 +14,27 @@ import {
   EuiSpacer,
   EuiText,
   EuiTitle,
+  EuiHeader,
+  EuiHeaderSection,
+  EuiHeaderLogo,
+  EuiPageHeader,
+  EuiStat,
+  EuiButtonIcon,
+  EuiSuperDatePicker,
+  EuiIcon,
+  EuiPopover,
+  EuiContextMenu,
+  EuiHealth,
+  EuiAvatar,
+  EuiComment,
+  EuiCommentList,
+  EuiHorizontalRule,
+  EuiLink,
+  EuiFlexGrid,
+  EuiToolTip,
+  EuiTextColor,
+  EuiButtonEmpty,
+  EuiCallOut,
 } from '@elastic/eui';
 import axios from 'axios';
 
@@ -28,18 +49,21 @@ interface Incident {
     p99_latency_ms?: number;
   };
   analyst_report?: {
-    timeline?: Array<{ timestamp?: string; event: string }>;
+    timeline?: Array<{ timestamp?: string; ts?: string; event: string }>;
     hypotheses?: Array<{ cause: string; confidence?: number; description?: string }>;
     rcca?: {
-      timeline?: Array<{ ts?: string; event: string }>;
+      timeline?: Array<{ ts?: string; timestamp?: string; event: string }>;
       hypotheses?: Array<{ cause: string; confidence?: number; description?: string }>;
     };
   };
   resolver_proposals?: Array<{
     action_id: string;
+    action_type?: string;
     title: string;
     description?: string;
+    estimated_time?: string;
     requires_approval?: boolean;
+    status?: string;
   }>;
 }
 
@@ -75,63 +99,67 @@ export const DataPulseApp = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [searchValue, setSearchValue] = useState('');
+  const [timeRange, setTimeRange] = useState({ start: 'now-7d', end: 'now' });
+  const [approvalMessage, setApprovalMessage] = useState<{ type: 'success' | 'danger' | 'warning'; title: string; message: string } | null>(null);
 
   const fetchIncidentDetail = useCallback(async (incidentId: string) => {
-    const response = await axios.get<Incident>(`${API_BASE}/api/datapulse/v1/incidents/${incidentId}`);
-    setIncident(response.data);
+    try {
+      const response = await axios.get<Incident>(`${API_BASE}/api/datapulse/v1/incidents/${incidentId}`);
+      setIncident(response.data);
+    } catch (err) {
+      console.error('Failed to fetch incident detail', err);
+    }
   }, []);
 
   const fetchIncidents = useCallback(async () => {
-    const response = await axios.get<IncidentListResponse>(`${API_BASE}/api/datapulse/v1/incidents`, {
-      params: {
-        page: 1,
-        page_size: 100,
-        sort_by: 'created_at',
-        sort_order: 'desc',
-      },
-    });
-
-    const records = response.data.records || [];
-    setIncidents(records);
-
-    const storedSelection = localStorage.getItem(SELECTED_INCIDENT_KEY);
-    const preferredId = selectedIncidentId || storedSelection;
-    const matched = preferredId ? records.find((item) => item.incident_id === preferredId) : undefined;
-    const nextSelection = matched?.incident_id || records[0]?.incident_id || null;
-
-    if (nextSelection) {
-      setSelectedIncidentId(nextSelection);
-      localStorage.setItem(SELECTED_INCIDENT_KEY, nextSelection);
-      await fetchIncidentDetail(nextSelection);
-    } else {
-      setSelectedIncidentId(null);
-      setIncident(null);
-    }
-  }, [fetchIncidentDetail, selectedIncidentId]);
-
-  const refreshData = useCallback(async () => {
     try {
-      setError(null);
-      await fetchIncidents();
+      const response = await axios.get<IncidentListResponse>(`${API_BASE}/api/datapulse/v1/incidents`, {
+        params: {
+          page: 1,
+          page_size: 100,
+          sort_by: 'created_at',
+          sort_order: 'desc',
+        },
+      });
+
+      const records = response.data.records || [];
+      setIncidents(records);
+
+      const storedSelection = localStorage.getItem(SELECTED_INCIDENT_KEY);
+      const preferredId = selectedIncidentId || storedSelection;
+      const matched = preferredId ? records.find((item) => item.incident_id === preferredId) : undefined;
+      const nextSelection = matched?.incident_id || records[0]?.incident_id || null;
+
+      if (nextSelection) {
+        setSelectedIncidentId(nextSelection);
+        localStorage.setItem(SELECTED_INCIDENT_KEY, nextSelection);
+        await fetchIncidentDetail(nextSelection);
+      } else {
+        setSelectedIncidentId(null);
+        setIncident(null);
+      }
     } catch (err) {
-      console.error('Failed to load incidents', err);
+      console.error('Failed to fetch incidents', err);
       setError('Failed to load incidents from API.');
     } finally {
       setLoading(false);
     }
+  }, [fetchIncidentDetail, selectedIncidentId]);
+
+  const refreshData = useCallback(async () => {
+    setLoading(true);
+    await fetchIncidents();
   }, [fetchIncidents]);
 
   useEffect(() => {
     refreshData();
-    const interval = setInterval(refreshData, 30000);
+    const interval = setInterval(fetchIncidents, 30000);
     return () => clearInterval(interval);
-  }, [refreshData]);
+  }, [fetchIncidents, refreshData]);
 
   const filteredIncidents = useMemo(() => {
     const term = searchValue.trim().toLowerCase();
-    if (!term) {
-      return incidents;
-    }
+    if (!term) return incidents;
     return incidents.filter(
       (item) =>
         item.incident_id.toLowerCase().includes(term) ||
@@ -153,199 +181,221 @@ export const DataPulseApp = () => {
     }
   };
 
+  const approveAction = async (actionId: string) => {
+    if (!incident) return;
+    setApprovalMessage(null);
+    try {
+      const response = await axios.post(`${API_BASE}/api/datapulse/v1/incidents/${incident.incident_id}/actions/${actionId}/approve`);
+      setApprovalMessage({
+        type: 'success',
+        title: 'Approval submitted',
+        message: `Action ${response.data.action_id} approved successfully.`
+      });
+      fetchIncidentDetail(incident.incident_id);
+    } catch (error: any) {
+      const status = error?.response?.status;
+      if (status === 404) {
+        setApprovalMessage({ type: 'warning', title: 'Not found', message: 'Item no longer exists.' });
+      } else if (status === 409) {
+        setApprovalMessage({ type: 'warning', title: 'Already approved', message: 'This remediation was already approved.' });
+      } else {
+        setApprovalMessage({ type: 'danger', title: 'Approval failed', message: 'Server error. Please try again.' });
+      }
+    }
+  };
+
   const rcca = incident?.analyst_report?.rcca;
   const timeline = rcca?.timeline || incident?.analyst_report?.timeline || [];
   const hypotheses = rcca?.hypotheses || incident?.analyst_report?.hypotheses || [];
 
   return (
     <EuiProvider colorMode="dark">
-      <EuiPage style={{ background: '#141519' }} paddingSize="m">
-        <EuiPageBody>
-          <EuiFlexGroup alignItems="center" justifyContent="spaceBetween">
+      {/* Header */}
+      <EuiHeader style={{ background: '#1D1E24', borderBottom: '1px solid #343741' }}>
+        <EuiHeaderSection grow={false}>
+          <EuiFlexGroup gutterSize="s" alignItems="center">
             <EuiFlexItem grow={false}>
-              <EuiTitle size="m">
-                <h2>DataPulse Incident Command Center</h2>
-              </EuiTitle>
+              <EuiHeaderLogo iconType="logoElastic">Elastic</EuiHeaderLogo>
             </EuiFlexItem>
             <EuiFlexItem grow={false}>
-              <EuiButton iconType="refresh" onClick={refreshData} isLoading={loading}>
-                Refresh
-              </EuiButton>
+              <EuiIcon type="agentApp" size="m" style={{ marginLeft: 8 }} />
+              <EuiText size="s" style={{ display: 'inline', marginLeft: 8, color: '#7DE2D1' }}>
+                DataPulse Agent
+              </EuiText>
             </EuiFlexItem>
           </EuiFlexGroup>
+        </EuiHeaderSection>
+        <EuiHeaderSection side="right">
+          <EuiFlexGroup gutterSize="s" alignItems="center">
+            <EuiButtonIcon iconType="help" aria-label="Help" color="text" />
+            <EuiButtonIcon iconType="bell" aria-label="Notifications" color="text" />
+            <EuiButtonIcon iconType="user" aria-label="Account" color="text" />
+          </EuiFlexGroup>
+        </EuiHeaderSection>
+      </EuiHeader>
 
-          <EuiSpacer size="m" />
+      <div style={{ background: '#25262E', padding: '12px 16px', borderBottom: '1px solid #343741' }}>
+        <EuiFlexGroup alignItems="center" gutterSize="s">
+          <EuiFlexItem grow={false}><EuiBadge color="primary">D</EuiBadge></EuiFlexItem>
+          <EuiFlexItem grow={false}>
+            <EuiTitle size="s"><h1>Incident Response Center</h1></EuiTitle>
+          </EuiFlexItem>
+        </EuiFlexGroup>
+      </div>
 
-          <EuiFieldSearch
-            placeholder="Search incidents by id, service, status, severity"
-            value={searchValue}
-            onChange={(e) => setSearchValue(e.target.value)}
-            fullWidth
-          />
-
-          <EuiSpacer size="m" />
-
-          {error && (
-            <EuiPanel color="danger" hasBorder>
-              <EuiText color="danger">{error}</EuiText>
-            </EuiPanel>
-          )}
-
-          {loading && incidents.length === 0 && (
-            <EuiEmptyPrompt
-              title={<h3>Loading incidents</h3>}
-              body={<p>Fetching live incident data from the DataPulse API.</p>}
+      <div style={{ background: '#1D1E24', padding: '12px 16px', borderBottom: '1px solid #343741' }}>
+        <EuiFlexGroup alignItems="center" gutterSize="m">
+          <EuiFlexItem grow={true} style={{ maxWidth: 400 }}>
+            <EuiFieldSearch
+              placeholder="Search incidents..."
+              value={searchValue}
+              onChange={(e) => setSearchValue(e.target.value)}
+              fullWidth
             />
-          )}
-
-          {!loading && incidents.length === 0 && !error && (
-            <EuiEmptyPrompt
-              title={<h3>No incidents found</h3>}
-              body={<p>There are currently no incidents matching the selected filters.</p>}
+          </EuiFlexItem>
+          <EuiFlexItem grow={false}>
+            <EuiSuperDatePicker
+              start={timeRange.start}
+              end={timeRange.end}
+              onTimeChange={({ start, end }: any) => setTimeRange({ start, end })}
             />
-          )}
+          </EuiFlexItem>
+          <EuiFlexItem grow={false}>
+            <EuiButton size="s" iconType="refresh" fill color="primary" onClick={refreshData} isLoading={loading}>
+              Refresh
+            </EuiButton>
+          </EuiFlexItem>
+        </EuiFlexGroup>
+      </div>
 
-          {incidents.length > 0 && (
-            <EuiFlexGroup gutterSize="m" alignItems="flexStart">
-              <EuiFlexItem grow={1}>
-                <EuiPanel hasBorder>
-                  <EuiTitle size="s">
-                    <h3>Open incidents ({filteredIncidents.length})</h3>
-                  </EuiTitle>
-                  <EuiSpacer size="s" />
-                  <EuiBasicTable
-                    items={filteredIncidents}
-                    rowProps={(item: Incident) => ({
-                      onClick: () => selectIncident(item.incident_id),
-                      style: {
-                        cursor: 'pointer',
-                        backgroundColor: item.incident_id === selectedIncidentId ? '#25262E' : 'transparent',
-                      },
-                    })}
-                    columns={[
-                      { field: 'incident_id', name: 'Incident ID' },
-                      { field: 'service', name: 'Service' },
-                      {
-                        name: 'Severity',
-                        render: (item: Incident) => (
-                          <EuiBadge color={getSeverityColor(item.severity)}>{(item.severity || 'unknown').toUpperCase()}</EuiBadge>
-                        ),
-                      },
-                      { field: 'status', name: 'Status' },
-                    ]}
-                  />
-                </EuiPanel>
-              </EuiFlexItem>
+      <EuiPage paddingSize="m" style={{ background: '#141519' }}>
+        <EuiPageBody>
+          <EuiFlexGroup gutterSize="m">
+            {/* Left/Sidebar: Incident List */}
+            <EuiFlexItem grow={false} style={{ width: 350 }}>
+              <EuiPanel hasBorder>
+                <EuiTitle size="xs"><h3>Quick List</h3></EuiTitle>
+                <EuiSpacer size="s" />
+                <EuiBasicTable
+                  items={filteredIncidents}
+                  rowProps={(item: Incident) => ({
+                    onClick: () => selectIncident(item.incident_id),
+                    style: {
+                      cursor: 'pointer',
+                      backgroundColor: item.incident_id === selectedIncidentId ? '#25262E' : 'transparent',
+                    },
+                  })}
+                  columns={[
+                    { field: 'incident_id', name: 'ID', width: '80px' },
+                    { field: 'service', name: 'Service' },
+                    {
+                      name: 'Sev',
+                      render: (item: Incident) => (
+                        <EuiBadge color={getSeverityColor(item.severity)}>{(item.severity || '??').charAt(0).toUpperCase()}</EuiBadge>
+                      ),
+                    },
+                  ]}
+                />
+              </EuiPanel>
+            </EuiFlexItem>
 
-              <EuiFlexItem grow={2}>
-                <EuiPanel hasBorder>
-                  {incident ? (
-                    <>
-                      <EuiFlexGroup gutterSize="s" alignItems="center">
-                        <EuiFlexItem grow={false}>
-                          <EuiTitle size="s">
-                            <h3>{incident.incident_id}</h3>
-                          </EuiTitle>
-                        </EuiFlexItem>
-                        <EuiFlexItem grow={false}>
-                          <EuiBadge color={getSeverityColor(incident.severity)}>{incident.severity?.toUpperCase() || 'UNKNOWN'}</EuiBadge>
-                        </EuiFlexItem>
-                        <EuiFlexItem grow={false}>
-                          <EuiBadge color="hollow">{incident.status || 'unknown'}</EuiBadge>
-                        </EuiFlexItem>
-                        <EuiFlexItem grow={false}>
-                          <EuiText size="s" color="subdued">{incident.service || 'unknown service'}</EuiText>
-                        </EuiFlexItem>
-                      </EuiFlexGroup>
+            {/* Center: Dashboard/Detail */}
+            <EuiFlexItem grow={3}>
+              {incident ? (
+                <>
+                  <EuiPanel hasShadow={false} style={{ background: '#1D1E24', border: '1px solid #343741' }}>
+                    <EuiFlexGroup alignItems="center" justifyContent="spaceBetween">
+                      <EuiFlexItem>
+                        <EuiTitle size="s"><h2>{incident.incident_id}: {incident.service}</h2></EuiTitle>
+                        <EuiFlexGroup gutterSize="s" style={{ marginTop: 4 }}>
+                          <EuiFlexItem grow={false}><EuiBadge color={getSeverityColor(incident.severity)}>{incident.severity?.toUpperCase()}</EuiBadge></EuiFlexItem>
+                          <EuiFlexItem grow={false}><EuiBadge color="hollow">{incident.status}</EuiBadge></EuiFlexItem>
+                        </EuiFlexGroup>
+                      </EuiFlexItem>
+                    </EuiFlexGroup>
+                    <EuiSpacer size="l" />
+                    <EuiFlexGroup>
+                      <EuiFlexItem>
+                        <EuiStat title={`${((incident.metrics?.error_rate || 0) * 100).toFixed(2)}%`} description="Current Error Rate" titleColor="#F04E98" />
+                      </EuiFlexItem>
+                      <EuiFlexItem>
+                        <EuiStat title={`${incident.metrics?.p99_latency_ms || 0}ms`} description="P99 Latency" />
+                      </EuiFlexItem>
+                      <EuiFlexItem>
+                        <EuiStat title={incident.status || 'Active'} description="Incident Status" />
+                      </EuiFlexItem>
+                    </EuiFlexGroup>
+                  </EuiPanel>
 
-                      <EuiSpacer size="m" />
+                  <EuiSpacer size="m" />
 
-                      <EuiFlexGroup>
-                        <EuiFlexItem>
-                          <EuiPanel hasBorder>
-                            <EuiText size="s" color="subdued">Error rate</EuiText>
-                            <EuiTitle size="m">
-                              <h4>{((incident.metrics?.error_rate || 0) * 100).toFixed(2)}%</h4>
-                            </EuiTitle>
-                          </EuiPanel>
-                        </EuiFlexItem>
-                        <EuiFlexItem>
-                          <EuiPanel hasBorder>
-                            <EuiText size="s" color="subdued">P99 latency</EuiText>
-                            <EuiTitle size="m">
-                              <h4>{incident.metrics?.p99_latency_ms || 0}ms</h4>
-                            </EuiTitle>
-                          </EuiPanel>
-                        </EuiFlexItem>
-                      </EuiFlexGroup>
+                  <EuiPanel hasShadow={false} style={{ background: '#1D1E24', border: '1px solid #343741' }}>
+                    <EuiTitle size="xs"><h3>Signals & Timeline</h3></EuiTitle>
+                    <EuiSpacer size="m" />
+                    <div style={{ height: 120, background: '#0F1419', borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      <EuiText color="subdued">Live Signal Graph Placeholder</EuiText>
+                    </div>
+                  </EuiPanel>
+                </>
+              ) : (
+                <EuiEmptyPrompt title={<h3>No incident selected</h3>} body={<p>Select an incident from the list to begin investigation.</p>} />
+              )}
+            </EuiFlexItem>
 
-                      <EuiSpacer size="m" />
+            {/* Right: RCA & Actions */}
+            <EuiFlexItem grow={2}>
+              {incident && (
+                <>
+                  <EuiPanel style={{ background: '#25262E', border: '1px solid #343741' }}>
+                    <EuiTitle size="xs"><h3>Root Cause Analysis</h3></EuiTitle>
+                    <EuiSpacer size="m" />
+                    {hypotheses.length > 0 ? (
+                      hypotheses.map((h, i) => (
+                        <div key={i} style={{ marginBottom: 12 }}>
+                          <EuiText size="s"><strong>{h.cause}</strong></EuiText>
+                          <EuiHealth color={h.confidence && h.confidence > 0.8 ? 'success' : 'warning'}>
+                            Confidence: {Math.round((h.confidence || 0) * 100)}%
+                          </Health>
+                          <EuiText size="xs" color="subdued">{h.description}</EuiText>
+                        </div>
+                      ))
+                    ) : (
+                      <EuiText color="subdued">Awaiting agent analysis...</EuiText>
+                    )}
+                  </EuiPanel>
 
-                      <EuiTitle size="xs">
-                        <h4>Root cause analysis</h4>
-                      </EuiTitle>
-                      <EuiSpacer size="s" />
-                      {hypotheses.length === 0 ? (
-                        <EuiText size="s" color="subdued">No analyst hypothesis yet.</EuiText>
-                      ) : (
-                        hypotheses.slice(0, 3).map((hypothesis, idx) => (
-                          <EuiPanel key={`${hypothesis.cause}-${idx}`} hasBorder style={{ marginBottom: 8 }}>
-                            <EuiText size="s">
-                              <strong>{hypothesis.cause}</strong>
-                            </EuiText>
-                            <EuiText size="s" color="subdued">
-                              Confidence: {Math.round((hypothesis.confidence || 0) * 100)}%
-                            </EuiText>
-                            {hypothesis.description && <EuiText size="s">{hypothesis.description}</EuiText>}
-                          </EuiPanel>
-                        ))
-                      )}
+                  <EuiSpacer size="m" />
 
-                      <EuiSpacer size="m" />
-
-                      <EuiTitle size="xs">
-                        <h4>Timeline</h4>
-                      </EuiTitle>
-                      <EuiSpacer size="s" />
-                      {timeline.length === 0 ? (
-                        <EuiText size="s" color="subdued">No timeline events available.</EuiText>
-                      ) : (
-                        timeline.slice(0, 6).map((event, idx) => (
-                          <EuiText size="s" key={`${event.event}-${idx}`}>
-                            {(event.timestamp || event.ts || 'n/a')}: {event.event}
-                          </EuiText>
-                        ))
-                      )}
-
-                      <EuiSpacer size="m" />
-
-                      <EuiTitle size="xs">
-                        <h4>Resolver proposals</h4>
-                      </EuiTitle>
-                      <EuiSpacer size="s" />
-                      {incident.resolver_proposals?.length ? (
-                        incident.resolver_proposals.map((proposal) => (
-                          <EuiPanel key={proposal.action_id} hasBorder style={{ marginBottom: 8 }}>
-                            <EuiText size="s">
-                              <strong>{proposal.title}</strong>
-                            </EuiText>
-                            {proposal.description && <EuiText size="s">{proposal.description}</EuiText>}
-                          </EuiPanel>
-                        ))
-                      ) : (
-                        <EuiText size="s" color="subdued">No resolver proposals yet.</EuiText>
-                      )}
-                    </>
-                  ) : (
-                    <EuiEmptyPrompt
-                      title={<h3>Select an incident</h3>}
-                      body={<p>Choose an incident from the list to view full details.</p>}
-                    />
-                  )}
-                </EuiPanel>
-              </EuiFlexItem>
-            </EuiFlexGroup>
-          )}
+                  <EuiPanel style={{ background: '#25262E', border: '1px solid #343741' }}>
+                    <EuiTitle size="xs"><h3>Resolver Actions</h3></EuiTitle>
+                    <EuiSpacer size="m" />
+                    {approvalMessage && (
+                      <EuiCallOut title={approvalMessage.title} color={approvalMessage.type} size="s" style={{ marginBottom: 12 }}>
+                        <p>{approvalMessage.message}</p>
+                      </EuiCallOut>
+                    )}
+                    {incident.resolver_proposals?.map((p) => (
+                      <EuiPanel key={p.action_id} paddingSize="s" style={{ background: '#1D1E24', marginBottom: 8 }}>
+                        <EuiFlexGroup alignItems="center" justifyContent="spaceBetween">
+                          <EuiFlexItem>
+                            <EuiText size="s"><strong>{p.title}</strong></EuiText>
+                            <EuiText size="xs" color="subdued">{p.description}</EuiText>
+                          </EuiFlexItem>
+                          <EuiFlexItem grow={false}>
+                            {p.status === 'approved' ? (
+                              <EuiBadge color="success">Approved</EuiBadge>
+                            ) : (
+                              <EuiButton size="s" color="primary" fill onClick={() => approveAction(p.action_id)}>Approve</EuiButton>
+                            )}
+                          </EuiFlexItem>
+                        </EuiFlexGroup>
+                      </EuiPanel>
+                    ))}
+                  </EuiPanel>
+                </>
+              )}
+            </EuiFlexItem>
+          </EuiFlexGroup>
         </EuiPageBody>
       </EuiPage>
     </EuiProvider>
