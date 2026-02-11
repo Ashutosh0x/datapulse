@@ -21,8 +21,15 @@ class SlackAdapter:
     
     async def send_action_approval_request(self, incident_id: str, action: Dict[str, Any]):
         """Send action approval request with interactive buttons"""
+        action_id = action.get("action_id")
+        if not action_id:
+            logger.warning(
+                f"Skipping malformed approval action for incident {incident_id}: missing action_id in {action}"
+            )
+            return
+
         blocks = self._build_approval_blocks(incident_id, action)
-        
+
         await self._post_message(self.channel, blocks)
     
     def _build_incident_blocks(self, incident: Dict[str, Any]) -> List[Dict]:
