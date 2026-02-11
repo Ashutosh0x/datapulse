@@ -3,9 +3,10 @@ import uuid
 import hashlib
 import hmac
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any
 from contextlib import suppress
+from enum import Enum
 
 from fastapi import FastAPI, HTTPException, Request, BackgroundTasks, Header
 from pydantic import BaseModel
@@ -132,6 +133,29 @@ class AgentReport(BaseModel):
     proposals: Optional[List[Dict[str, Any]]] = None
 
 
+class ActionState(str, Enum):
+    proposed = "proposed"
+    approved = "approved"
+    rejected = "rejected"
+    executed = "executed"
+    failed = "failed"
+
+
+ALLOWED_ACTION_TRANSITIONS = {
+    ActionState.proposed: {ActionState.approved, ActionState.rejected},
+    ActionState.approved: {ActionState.executed, ActionState.failed},
+    ActionState.rejected: set(),
+    ActionState.executed: set(),
+    ActionState.failed: set(),
+}
+
+
+class ActionTransitionRequest(BaseModel):
+    actor: str
+    source: str = "ui"
+    reason: Optional[str] = None
+
+
 @app.on_event("startup")
 async def startup_validation():
     validate_slack_webhook_configuration()
@@ -160,7 +184,7 @@ async def create_incident(req: CreateIncidentRequest, background_tasks: Backgrou
     doc = req.dict()
     doc["incident_id"] = incident_id
     doc["status"] = "open"
-    doc["created_at"] = datetime.now().isoformat()
+    doc["created_at"] = datetime.now(timezone.utc).isoformat()
     doc["timeline"] = [{"timestamp": doc["created_at"], "event": "Incident Detected by Sentinel"}]
     
     # 1. Save to ES
@@ -266,7 +290,9 @@ async def receive_report(report: AgentReport, background_tasks: BackgroundTasks)
     if report.agent == "analyst":
         update_doc["analyst_report"] = report.rcca
     elif report.agent == "resolver":
+        normalized_actions = build_actions_from_proposals(report.incident_id, report.proposals or [])
         update_doc["resolver_proposals"] = report.proposals
+        update_doc["actions"] = normalized_actions
     
     try:
         await es.update(index=INDEX_INCIDENTS, id=report.incident_id, doc=update_doc)
@@ -284,70 +310,56 @@ async def receive_report(report: AgentReport, background_tasks: BackgroundTasks)
     return {"status": "processed"}
 
 
-@app.post("/api/datapulse/v1/incidents/{incident_id}/actions/{action_id}/approve")
-async def approve_action(
-    incident_id: str,
-    action_id: str,
-    x_user_id: Optional[str] = Header(default="system"),
-):
-    try:
-        resp = await es.get(index=INDEX_INCIDENTS, id=incident_id)
-    except NotFoundError:
-        raise HTTPException(status_code=404, detail="Incident not found")
-    except Exception as e:
-        logger.error(f"Failed to fetch incident for approval: {e}")
-        raise HTTPException(status_code=500, detail="Failed to process approval")
-
-    incident_doc = resp.get("_source", {})
-    proposals = incident_doc.get("resolver_proposals") or []
-    proposal = _find_action(proposals, action_id)
-
-    if not proposal:
-        raise HTTPException(status_code=404, detail="Action not found")
-
-    if proposal.get("status") == "approved":
-        raise HTTPException(status_code=409, detail="Action already approved")
-
-    timestamp = datetime.now().isoformat()
-    approved_by = x_user_id or "system"
-
-    proposal["status"] = "approved"
-    proposal["approved_by"] = approved_by
-    proposal["approved_at"] = timestamp
-
-    approvals = incident_doc.get("action_approvals") or []
-    approvals.append(
-        {
-            "incident_id": incident_id,
-            "action_id": action_id,
-            "status": "approved",
-            "approved_by": approved_by,
-            "timestamp": timestamp,
-        }
-    )
-
-    try:
-        await es.update(
-            index=INDEX_INCIDENTS,
-            id=incident_id,
-            doc={
-                "resolver_proposals": proposals,
-                "action_approvals": approvals,
-            },
-        )
-    except NotFoundError:
-        raise HTTPException(status_code=404, detail="Incident not found")
-    except Exception as e:
-        logger.error(f"Failed to persist action approval: {e}")
-        raise HTTPException(status_code=500, detail="Failed to persist approval")
-
+@app.get("/api/datapulse/v1/incidents/{incident_id}/actions")
+async def get_incident_actions(incident_id: str):
+    incident = await get_incident_or_404(incident_id)
     return {
         "incident_id": incident_id,
-        "action_id": action_id,
-        "status": "approved",
-        "approved_by": approved_by,
-        "timestamp": timestamp,
+        "actions": incident.get("actions", []),
     }
+
+
+@app.get("/api/datapulse/v1/incidents/{incident_id}/actions/history")
+async def get_incident_action_history(incident_id: str):
+    incident = await get_incident_or_404(incident_id)
+    return {
+        "incident_id": incident_id,
+        "history": incident.get("action_history", []),
+    }
+
+
+@app.post("/api/datapulse/v1/incidents/{incident_id}/actions/{action_id}/approve")
+async def approve_action_endpoint(
+    incident_id: str,
+    action_id: str,
+    req: Optional[ActionTransitionRequest] = None,
+    x_user_id: Optional[str] = Header(default="system"),
+):
+    # Support both old and new request formats
+    actor = req.actor if req else (x_user_id or "system")
+    source = req.source if req else "ui"
+    reason = req.reason if req else None
+
+    return await transition_action(
+        incident_id=incident_id,
+        action_id=action_id,
+        to_state=ActionState.approved,
+        actor=actor,
+        source=source,
+        reason=reason,
+    )
+
+
+@app.post("/api/datapulse/v1/incidents/{incident_id}/actions/{action_id}/reject")
+async def reject_action(incident_id: str, action_id: str, req: ActionTransitionRequest):
+    return await transition_action(
+        incident_id=incident_id,
+        action_id=action_id,
+        to_state=ActionState.rejected,
+        actor=req.actor,
+        source=req.source,
+        reason=req.reason,
+    )
 
 
 @app.post("/api/datapulse/v1/webhook/integrations/slack")
@@ -380,9 +392,28 @@ async def slack_webhook(request: Request, x_slack_signature: Optional[str] = Hea
             logger.warning(f"Received Slack action callback without action_id for incident {incident_id}")
             return {"status": "invalid_action"}
 
-        if action_type in {"approve", "reject"}:
-            logger.info(f"Received {action_type} for action {action_id} incident {incident_id}")
-            await persist_action_decision(incident_id, action_id, action_type, payload)
+        actor = payload.get("user", {}).get("username") or payload.get("user", {}).get("name") or "slack-user"
+        
+        if action_type == "approve":
+            logger.info(f"Received approve for action {action_id} incident {incident_id}")
+            await transition_action(
+                incident_id=incident_id,
+                action_id=action_id,
+                to_state=ActionState.approved,
+                actor=actor,
+                source="slack_webhook",
+            )
+            await persist_action_decision(incident_id, action_id, "approved", payload)
+        elif action_type == "reject":
+            logger.info(f"Received reject for action {action_id} incident {incident_id}")
+            await transition_action(
+                incident_id=incident_id,
+                action_id=action_id,
+                to_state=ActionState.rejected,
+                actor=actor,
+                source="slack_webhook",
+            )
+            await persist_action_decision(incident_id, action_id, "rejected", payload)
 
     return {"status": "processed"}
 
@@ -397,7 +428,7 @@ async def persist_action_decision(incident_id: str, action_id: str, decision: st
         "decision": decision,
         "actor": actor,
         "source": "slack",
-        "recorded_at": datetime.now().isoformat(),
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
     }
 
     try:
@@ -431,7 +462,7 @@ def verify_slack_signature(body: bytes, signature: str, headers: Dict[str, str])
     with suppress(ValueError):
         timestamp_int = int(timestamp)
         # Prevent replay attacks
-        if abs(timestamp_int - int(datetime.now().timestamp())) > 60 * 5:
+        if abs(timestamp_int - int(datetime.now(timezone.utc).timestamp())) > 60 * 5:
             return False
         sig_basestring = f"v0:{timestamp}:{body.decode('utf-8')}"
         req_hash = hmac.new(
@@ -488,6 +519,127 @@ async def send_action_approvals(incident_id: str, proposals: List[Dict[str, Any]
                 logger.error(f"Failed to send approval request: {e}")
 
 
+def build_actions_from_proposals(incident_id: str, proposals: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    actions = []
+    for idx, proposal in enumerate(proposals, start=1):
+        action_id = proposal.get("action_id") or f"ACT-{idx:03d}"
+        now = datetime.now(timezone.utc).isoformat()
+        actions.append({
+            "action_id": action_id,
+            "incident_id": incident_id,
+            "state": ActionState.proposed.value,
+            "title": proposal.get("title"),
+            "action_type": proposal.get("action_type"),
+            "description": proposal.get("description"),
+            "estimated_time": proposal.get("estimated_time"),
+            "requires_approval": proposal.get("requires_approval", False),
+            "created_at": now,
+            "updated_at": now,
+            "last_actor": "resolver-agent",
+        })
+    return actions
+
+
+async def get_incident_or_404(incident_id: str) -> Dict[str, Any]:
+    try:
+        resp = await es.get(index=INDEX_INCIDENTS, id=incident_id)
+        return serialize_incident(resp["_source"], fallback_id=resp.get("_id"))
+    except Exception:
+        raise HTTPException(status_code=404, detail="Incident not found")
+
+
+async def transition_action(
+    incident_id: str,
+    action_id: str,
+    to_state: ActionState,
+    actor: str,
+    source: str,
+    reason: Optional[str] = None,
+) -> Dict[str, Any]:
+    incident = await get_incident_or_404(incident_id)
+    actions = incident.get("actions", [])
+    action = next((item for item in actions if item.get("action_id") == action_id), None)
+    if not action:
+        # Fallback to resolver_proposals if actions list is legacy
+        proposals = incident.get("resolver_proposals") or []
+        proposal = _find_action(proposals, action_id)
+        if proposal:
+             # Migrating legacy proposal to actions
+             actions = build_actions_from_proposals(incident_id, proposals)
+             action = next((item for item in actions if item.get("action_id") == action_id), None)
+        
+        if not action:
+            raise HTTPException(status_code=404, detail="Action not found")
+
+    current_state = ActionState(action.get("state", ActionState.proposed.value))
+    allowed_states = ALLOWED_ACTION_TRANSITIONS.get(current_state, set())
+    if to_state not in allowed_states:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid transition from {current_state.value} to {to_state.value}",
+        )
+
+    now = datetime.now(timezone.utc).isoformat()
+    event = {
+        "incident_id": incident_id,
+        "action_id": action_id,
+        "from_state": current_state.value,
+        "to_state": to_state.value,
+        "actor": actor,
+        "source": source,
+        "reason": reason,
+        "timestamp": now,
+    }
+
+    for candidate in actions:
+        if candidate.get("action_id") == action_id:
+            candidate["state"] = to_state.value
+            candidate["updated_at"] = now
+            candidate["last_actor"] = actor
+            break
+
+    history = incident.get("action_history", [])
+    history.append(event)
+
+    # Also update the legacy resolver_proposals to keep them in sync if they exist
+    resolver_proposals = incident.get("resolver_proposals") or []
+    for p in resolver_proposals:
+        if p.get("action_id") == action_id:
+            p["status"] = to_state.value
+            p["approved_by"] = actor if to_state == ActionState.approved else p.get("approved_by")
+            p["approved_at"] = now if to_state == ActionState.approved else p.get("approved_at")
+
+    await es.update(
+        index=INDEX_INCIDENTS,
+        id=incident_id,
+        doc={
+            "actions": actions, 
+            "action_history": history,
+            "resolver_proposals": resolver_proposals
+        },
+    )
+    await write_audit_event(event)
+
+    return {
+        "status": "ok",
+        "incident_id": incident_id,
+        "action_id": action_id,
+        "state": to_state.value,
+    }
+
+
+async def write_audit_event(event: Dict[str, Any]):
+    doc_id = f"{event['incident_id']}-{event['action_id']}-{event['timestamp']}"
+    await es.index(
+        index=INDEX_AUDIT,
+        id=doc_id,
+        document={
+            "event_type": "action_state_transition",
+            **event,
+        },
+    )
+
+
 async def trigger_analyst(incident_id, service, detected_at):
     try:
         async with httpx.AsyncClient() as client:
@@ -527,7 +679,7 @@ async def metrics():
             "agents_status": "healthy",
             "active_agents": 3,
             "es_connected": True,
-            "last_captured": datetime.now().isoformat()
+            "last_captured": datetime.now(timezone.utc).isoformat()
         }
     except Exception as e:
         logger.error(f"Metrics collection failed: {e}")
