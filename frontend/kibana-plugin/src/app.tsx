@@ -59,6 +59,20 @@ interface Incident {
     estimated_time: string;
     requires_approval: boolean;
   }>;
+  actions?: Array<{
+    action_id: string;
+    title: string;
+    state: string;
+    requires_approval: boolean;
+  }>;
+  action_history?: Array<{
+    action_id: string;
+    from_state: string;
+    to_state: string;
+    actor: string;
+    timestamp: string;
+    source: string;
+  }>;
   created_at: string;
 }
 
@@ -132,6 +146,18 @@ export const DataPulseApp = () => {
             requires_approval: true
           }
         ],
+
+        actions: [
+          { action_id: "ACT-001", title: "Rollback deployment", state: "proposed", requires_approval: true },
+          { action_id: "ACT-002", title: "Increase DB pool size", state: "approved", requires_approval: true },
+          { action_id: "ACT-003", title: "Read DB outage runbook", state: "executed", requires_approval: false }
+        ],
+        action_history: [
+          { action_id: "ACT-001", from_state: "proposed", to_state: "approved", actor: "oncall-user", timestamp: "2026-01-31T14:22:00Z", source: "ui" },
+          { action_id: "ACT-002", from_state: "proposed", to_state: "approved", actor: "slack-user", timestamp: "2026-01-31T14:23:00Z", source: "slack_webhook" },
+          { action_id: "ACT-003", from_state: "proposed", to_state: "approved", actor: "oncall-user", timestamp: "2026-01-31T14:24:00Z", source: "ui" },
+          { action_id: "ACT-003", from_state: "approved", to_state: "executed", actor: "resolver-agent", timestamp: "2026-01-31T14:25:00Z", source: "executor" }
+        ],
         created_at: "2026-01-31T14:15:02Z"
       });
       setLoading(false);
@@ -143,10 +169,24 @@ export const DataPulseApp = () => {
 
   const approveAction = async (actionId: string) => {
     try {
-      await axios.post(`${API_BASE}/api/datapulse/v1/incidents/${incident!.incident_id}/actions/${actionId}/approve`);
+      await axios.post(`${API_BASE}/api/datapulse/v1/incidents/${incident!.incident_id}/actions/${actionId}/approve`, {
+        actor: "ui-oncall",
+        source: "ui"
+      });
       console.log(`Action ${actionId} approved`);
     } catch (error) {
       console.error("Failed to approve action", error);
+    }
+  };
+
+  const getActionStateColor = (state: string) => {
+    switch (state) {
+      case "proposed": return "hollow";
+      case "approved": return "primary";
+      case "rejected": return "danger";
+      case "executed": return "success";
+      case "failed": return "warning";
+      default: return "default";
     }
   };
 
@@ -483,11 +523,18 @@ export const DataPulseApp = () => {
                 </EuiTitle>
                 <EuiSpacer size="m" />
 
-                {incident?.resolver_proposals?.map((proposal, idx) => (
-                  <div key={proposal.action_id} style={{ marginBottom: 8 }}>
-                    <EuiText size="s">
-                      {idx + 1}. {proposal.title}
-                    </EuiText>
+                {incident?.actions?.map((action, idx) => (
+                  <div key={action.action_id} style={{ marginBottom: 10 }}>
+                    <EuiFlexGroup alignItems="center" justifyContent="spaceBetween" gutterSize="s" responsive={false}>
+                      <EuiFlexItem>
+                        <EuiText size="s">
+                          {idx + 1}. {action.title}
+                        </EuiText>
+                      </EuiFlexItem>
+                      <EuiFlexItem grow={false}>
+                        <EuiBadge color={getActionStateColor(action.state)}>{action.state}</EuiBadge>
+                      </EuiFlexItem>
+                    </EuiFlexGroup>
                   </div>
                 ))}
 
@@ -498,6 +545,23 @@ export const DataPulseApp = () => {
                   </EuiButton>
                   <EuiButtonIcon iconType="lock" aria-label="Lock" />
                 </EuiFlexGroup>
+
+                <EuiSpacer size="m" />
+                <EuiTitle size="xxs">
+                  <h4>Action Timeline</h4>
+                </EuiTitle>
+                <EuiSpacer size="s" />
+                <EuiCommentList>
+                  {incident?.action_history?.map((entry, idx) => (
+                    <EuiComment
+                      key={`${entry.action_id}-${idx}`}
+                      username={entry.actor}
+                      event={`${entry.action_id}: ${entry.from_state} → ${entry.to_state}`}
+                      timestamp={new Date(entry.timestamp).toLocaleTimeString()}
+                      timelineAvatar={<EuiIcon type="clock" size="m" />}
+                    />
+                  ))}
+                </EuiCommentList>
               </EuiPanel>
 
               <EuiSpacer size="m" />
