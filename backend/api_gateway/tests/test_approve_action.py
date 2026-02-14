@@ -3,7 +3,12 @@ import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi.testclient import TestClient
-from elasticsearch import NotFoundError
+try:
+    from elasticsearch import NotFoundError
+except ImportError:
+    class NotFoundError(Exception):
+        def __init__(self, message=None, meta=None, body=None):
+            super().__init__(message)
 
 
 class ApproveActionContractTests(unittest.TestCase):

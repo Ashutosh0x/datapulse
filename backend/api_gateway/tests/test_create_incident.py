@@ -39,7 +39,7 @@ class CreateIncidentFailureContractTest(unittest.TestCase):
             "correlation_id": "corr-12345",
         }
 
-        with patch.object(main.es, "index", AsyncMock(side_effect=RuntimeError("ES down"))) as mocked_index, \
+        with patch.object(main.es, "index", AsyncMock(side_effect=RuntimeError("ES down")), create=True) as mocked_index, \
              patch.object(main, "notify_integrations", AsyncMock()) as mocked_notify, \
              patch.object(main, "trigger_analyst", AsyncMock()) as mocked_trigger:
             response = self.client.post("/api/datapulse/v1/incidents", json=payload)
