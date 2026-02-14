@@ -6,11 +6,19 @@ import json
 from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any
 from contextlib import suppress
+from contextlib import asynccontextmanager
 from enum import Enum
 
 from fastapi import FastAPI, HTTPException, Request, BackgroundTasks, Header
 from pydantic import BaseModel
-from elasticsearch import AsyncElasticsearch, NotFoundError
+try:
+    from elasticsearch import AsyncElasticsearch, NotFoundError
+except ImportError:
+    # Compatibility fallback for tests/stubs where NotFoundError may not exist
+    from elasticsearch import AsyncElasticsearch
+
+    class NotFoundError(Exception):
+        pass
 from loguru import logger
 import httpx
 
@@ -25,7 +33,13 @@ except ImportError:
     from jira_adapter.jira_adapter import JiraAdapter
     from slack_adapter.slack_adapter import SlackAdapter
 
-app = FastAPI(title="DataPulse API Gateway", version="1.0.0")
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    validate_slack_webhook_configuration()
+    yield
+
+
+app = FastAPI(title="DataPulse API Gateway", version="1.0.0", lifespan=lifespan)
 
 ES_HOST = os.getenv("ES_HOST", "http://elasticsearch:9200")
 es = AsyncElasticsearch(hosts=[ES_HOST])
@@ -37,6 +51,8 @@ RESOLVER_URL = os.getenv("RESOLVER_URL", "http://resolver:8000")
 # Indexing Configuration
 INDEX_INCIDENTS = os.getenv("INDEX_INCIDENTS", ".incidents-datapulse-000001")
 INDEX_AUDIT = os.getenv("INDEX_AUDIT", ".audit-datapulse-000001")
+
+ALLOWED_SORT_FIELDS = {"created_at", "detected_at", "severity", "status", "service"}
 
 # Lazy load integrations
 _slack_adapter = None
@@ -80,6 +96,19 @@ def validate_slack_webhook_configuration() -> bool:
         "ALLOW_INSECURE_SLACK_WEBHOOK=true for local development only"
     )
     return False
+
+
+def get_auto_approval_config() -> Dict[str, Any]:
+    """Return production-safe policy knobs for automatic action approval."""
+    return {
+        "enabled": _env_flag_is_true("ENABLE_AUTO_APPROVAL"),
+        "max_risk_score": float(os.getenv("AUTO_APPROVAL_MAX_RISK_SCORE", "0.3")),
+        "allow_types": {
+            action_type.strip()
+            for action_type in os.getenv("AUTO_APPROVAL_ALLOW_TYPES", "scale_out,cache_warmup").split(",")
+            if action_type.strip()
+        },
+    }
 
 
 def get_slack_adapter():
@@ -156,11 +185,6 @@ class ActionTransitionRequest(BaseModel):
     reason: Optional[str] = None
 
 
-@app.on_event("startup")
-async def startup_validation():
-    validate_slack_webhook_configuration()
-
-
 def serialize_incident(incident_doc: Dict[str, Any], fallback_id: Optional[str] = None) -> Dict[str, Any]:
     """Normalize incident records returned by API list/detail endpoints."""
     normalized = dict(incident_doc)
@@ -181,7 +205,7 @@ def _find_action(proposals: List[Dict[str, Any]], action_id: str) -> Optional[Di
 @app.post("/api/datapulse/v1/incidents", status_code=201)
 async def create_incident(req: CreateIncidentRequest, background_tasks: BackgroundTasks):
     incident_id = f"INC-{uuid.uuid4().hex[:8].upper()}"
-    doc = req.dict()
+    doc = req.model_dump()
     doc["incident_id"] = incident_id
     doc["status"] = "open"
     doc["created_at"] = datetime.now(timezone.utc).isoformat()
@@ -241,6 +265,11 @@ async def list_incidents(
         raise HTTPException(status_code=400, detail="page_size must be between 1 and 100")
     if sort_order not in {"asc", "desc"}:
         raise HTTPException(status_code=400, detail="sort_order must be either 'asc' or 'desc'")
+    if sort_by not in ALLOWED_SORT_FIELDS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"sort_by must be one of: {', '.join(sorted(ALLOWED_SORT_FIELDS))}",
+        )
 
     filters = []
     if severity:
@@ -291,8 +320,11 @@ async def receive_report(report: AgentReport, background_tasks: BackgroundTasks)
         update_doc["analyst_report"] = report.rcca
     elif report.agent == "resolver":
         normalized_actions = build_actions_from_proposals(report.incident_id, report.proposals or [])
+        auto_approved_actions = auto_approve_actions(normalized_actions)
         update_doc["resolver_proposals"] = report.proposals
         update_doc["actions"] = normalized_actions
+        if auto_approved_actions:
+            update_doc["action_history"] = auto_approved_actions
     
     try:
         await es.update(index=INDEX_INCIDENTS, id=report.incident_id, doc=update_doc)
@@ -540,10 +572,48 @@ def build_actions_from_proposals(incident_id: str, proposals: List[Dict[str, Any
     return actions
 
 
+def auto_approve_actions(actions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Apply low-risk auto-approval policy for production-safe action automation."""
+    cfg = get_auto_approval_config()
+    if not cfg["enabled"]:
+        return []
+
+    now = datetime.now(timezone.utc).isoformat()
+    history_events = []
+    for action in actions:
+        if action.get("requires_approval", True):
+            continue
+
+        action_type = (action.get("action_type") or "").strip().lower()
+        risk_score = float(action.get("risk_score") or 1.0)
+        if action_type not in cfg["allow_types"] or risk_score > cfg["max_risk_score"]:
+            continue
+
+        action["state"] = ActionState.approved.value
+        action["updated_at"] = now
+        action["last_actor"] = "policy-engine"
+        history_events.append(
+            {
+                "incident_id": action.get("incident_id"),
+                "action_id": action.get("action_id"),
+                "from_state": ActionState.proposed.value,
+                "to_state": ActionState.approved.value,
+                "actor": "policy-engine",
+                "source": "auto_approval_policy",
+                "reason": "Low-risk policy match",
+                "timestamp": now,
+            }
+        )
+
+    return history_events
+
+
 async def get_incident_or_404(incident_id: str) -> Dict[str, Any]:
     try:
         resp = await es.get(index=INDEX_INCIDENTS, id=incident_id)
         return serialize_incident(resp["_source"], fallback_id=resp.get("_id"))
+    except NotFoundError:
+        raise HTTPException(status_code=404, detail="Incident not found")
     except Exception:
         raise HTTPException(status_code=404, detail="Incident not found")
 
@@ -621,10 +691,12 @@ async def transition_action(
     await write_audit_event(event)
 
     return {
-        "status": "ok",
+        "status": to_state.value,
         "incident_id": incident_id,
         "action_id": action_id,
         "state": to_state.value,
+        "approved_by": actor if to_state == ActionState.approved else None,
+        "timestamp": now,
     }
 
 
@@ -666,6 +738,20 @@ async def trigger_resolver(incident_id, rcca_context):
 @app.get("/healthz")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/readyz")
+async def readiness():
+    """Readiness probe with dependency checks for production deployments."""
+    try:
+        es_ok = await es.ping()
+    except Exception:
+        es_ok = False
+
+    if not es_ok:
+        raise HTTPException(status_code=503, detail={"status": "degraded", "es_connected": False})
+
+    return {"status": "ready", "es_connected": True}
 
 
 @app.get("/metrics")
