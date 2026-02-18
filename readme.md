@@ -7,6 +7,8 @@
 [![Docker](https://img.shields.io/badge/docker-%230db7ed.svg?style=for-the-badge&logo=docker&logoColor=white)](https://docker.com)
 
 **DataPulse** is a next-generation "Human-in-the-Loop" incident response platform built for the **Elastic Hackathon**. It leverages the **Elastic Agent Builder**, **ES|QL**, and **Semantic Search** to transform raw logs into actionable remediation strategies autonomously.
+<img width="2816" height="1536" alt="Gemini_Generated_Image_rgmh8qrgmh8qrgmh" src="https://github.com/user-attachments/assets/4d10dda7-5a5e-40cf-998c-87b001ed3885" />
+
 
 
 https://github.com/user-attachments/assets/514958f9-fac0-499f-921e-061b939ce70b
@@ -126,4 +128,5 @@ For full setup guides, agent configuration, and integration tutorials, see:
 - [ ] Multi-region incident correlation.
 
 *Built for the Elastic Hackathon 2026.*
+
 
