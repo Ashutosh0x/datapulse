@@ -18,6 +18,11 @@
             "destination": "/frontend/kibana-plugin/build/index.html"
         }
     ],
+    "functions": {
+        "api/index.py": {
+            "runtime": "python3.11"
+        }
+    },
     "env": {
         "REACT_APP_API_URL": "/api/datapulse/v1"
     }
