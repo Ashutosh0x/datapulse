@@ -7,15 +7,15 @@
         },
         {
             "source": "/static/(.*)",
-            "destination": "/frontend/kibana-plugin/build/static/$1"
+            "destination": "/static/$1"
         },
         {
             "source": "/(.*)\\.(js|css|png|jpg|svg|ico|json)",
-            "destination": "/frontend/kibana-plugin/build/$1.$2"
+            "destination": "/$1.$2"
         },
         {
             "source": "/(.*)",
-            "destination": "/frontend/kibana-plugin/build/index.html"
+            "destination": "/index.html"
         }
     ],
     "env": {
