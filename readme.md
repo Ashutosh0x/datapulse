@@ -100,14 +100,16 @@ DataPulse is built on a distributed agent architecture:
 # 1. Setup Environment
 cp .env.example .env
 
-# 2. Start the DataPulse stack
+# 2. Initialize Infrastructure (Storage & Knowledge Base)
+./scripts/setup_elasticsearch_indices.sh
+npm run seed  # Populates runbooks-knowledge index
+
+# 3. Start Core Services
 docker-compose up -d
 
-# 3. Initialize Elasticsearch Indices
-./scripts/setup_elasticsearch_indices.sh
-
-# 4. Generate Synthetic Trailing Logs
-python data/generator/generate_data.py
+# 4. (Advanced) Run MCP Tool Server
+# Exposes Slack/Jira tools for Discovery by Elastic Agent Builder
+python integrations/mcp-adapters/mcp_server.py
 ```
 
 Visit the UI at `http://localhost:3000` (or within your Kibana custom app frame).

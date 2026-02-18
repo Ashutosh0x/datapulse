@@ -1,4 +1,5 @@
 import os
+import asyncio
 import uuid
 import hashlib
 import hmac
@@ -31,8 +32,16 @@ except ImportError:
     # Fallback for local development if not installed as package
     import sys
     sys.path.append(os.path.join(os.path.dirname(__file__), "../../../integrations/mcp-adapters"))
+    sys.path.append(os.path.join(os.path.dirname(__file__), "../../../integrations/workflows"))
     from jira_adapter.jira_adapter import JiraAdapter
     from slack_adapter.slack_adapter import SlackAdapter
+
+try:
+    from workflow_adapter import get_workflow_adapter
+except ImportError:
+    import sys
+    sys.path.append(os.path.join(os.path.dirname(__file__), "../../../integrations/workflows"))
+    from workflow_adapter import get_workflow_adapter
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
@@ -706,6 +715,12 @@ async def transition_action(
         },
     )
     await write_audit_event(event)
+
+    # Trigger automation workflow if moved to approved state
+    if to_state == ActionState.approved:
+        workflow = get_workflow_adapter()
+        # Non-blocking trigger
+        asyncio.create_task(workflow.trigger_remediation(incident_id, action))
 
     return {
         "status": to_state.value,
