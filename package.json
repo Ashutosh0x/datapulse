@@ -3,7 +3,8 @@
     "version": "1.0.0",
     "private": true,
     "scripts": {
-        "build": "cd frontend/kibana-plugin && npm install && npm run build",
+        "build": "cd frontend/kibana-plugin && CI=false npm run build",
+        "postinstall": "cd frontend/kibana-plugin && npm install",
         "install-frontend": "cd frontend/kibana-plugin && npm install"
     },
     "engines": {
