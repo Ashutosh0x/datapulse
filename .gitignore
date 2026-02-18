@@ -56,3 +56,5 @@ Thumbs.db
 
 # Elasticsearch data
 data/es/
+.vercel
+.env*.local
