@@ -4,8 +4,7 @@
     "private": true,
     "scripts": {
         "build": "cd frontend/kibana-plugin && CI=false npm run build",
-        "postinstall": "cd frontend/kibana-plugin && npm install",
-        "install-frontend": "cd frontend/kibana-plugin && npm install"
+        "postinstall": "cd frontend/kibana-plugin && npm install --legacy-peer-deps"
     },
     "engines": {
         "node": ">=18.0.0"
