@@ -1,0 +1,6 @@
+# MCP Server Dependencies
+# These require Pydantic v2+, which is incompatible with the main API Gateway's Pydantic v1 pinning.
+mcp==1.2.0
+pydantic>=2.10.1
+loguru==0.7.2
+httpx==0.25.1

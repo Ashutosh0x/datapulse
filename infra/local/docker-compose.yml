@@ -27,13 +27,6 @@ services:
     networks:
       - datapulse-net
 
-  redis:
-    image: redis:alpine
-    container_name: datapulse-redis
-    ports:
-      - "6379:6379"
-    networks:
-      - datapulse-net
 
   sentinel:
     build:
@@ -41,10 +34,8 @@ services:
     container_name: datapulse-sentinel
     environment:
       - ES_HOST=http://elasticsearch:9200
-      - REDIS_URL=redis://redis:6379/0
     depends_on:
       - elasticsearch
-      - redis
     networks:
       - datapulse-net
 
@@ -54,14 +45,8 @@ services:
     container_name: datapulse-analyst
     environment:
       - ES_HOST=http://elasticsearch:9200
-      - REDIS_URL=redis://redis:6379/0
-      - KIBANA_URL=${KIBANA_URL}
-      - ELASTIC_API_KEY=${ELASTIC_API_KEY}
-      - ELASTIC_AGENT_ID=incident-investigator
-      - GATEWAY_URL=http://api-gateway:8000
     depends_on:
       - elasticsearch
-      - redis
     networks:
       - datapulse-net
 
@@ -71,10 +56,8 @@ services:
     container_name: datapulse-resolver
     environment:
       - ES_HOST=http://elasticsearch:9200
-      - REDIS_URL=redis://redis:6379/0
     depends_on:
       - elasticsearch
-      - redis
     networks:
       - datapulse-net
 
@@ -87,10 +70,8 @@ services:
       - "8000:8000"
     environment:
       - ES_HOST=http://elasticsearch:9200
-      - REDIS_URL=redis://redis:6379/0
     depends_on:
       - elasticsearch
-      - redis
       - sentinel
       - analyst
       - resolver

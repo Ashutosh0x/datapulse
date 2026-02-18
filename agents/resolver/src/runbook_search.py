@@ -43,39 +43,55 @@ async def resolve_incident(incident_id: str, rcca_context: dict):
 
 async def search_runbooks(query_text: str):
     """
-    Search for runbooks using ES|QL with basic sanitization.
-    Future: Integrate with Elastic Inference API for ELSER/Vector search.
+    Search for runbooks using a hybrid approach:
+    1. ES|QL for structured/exact matching.
+    2. Multi-match search for broader recall.
     """
     # Basic sanitization for ES|QL
     safe_query = query_text.replace('"', '\\"')
     
     esql_query = f"""
-    FROM runbooks-knowledge 
+    FROM "runbooks-knowledge"
     | WHERE MATCH(content, "{safe_query}") OR MATCH(title, "{safe_query}")
     | LIMIT 5 
     | KEEP title, url, content, runbook_id
     """
-    results = []
+    
+    results_map = {} # Using a map to de-duplicate results
+    
+    # 1. ES|QL Attempt
     try:
         resp = await es.esql.query(query=esql_query, format="json")
         if resp.get("values"):
             cols = [c["name"] for c in resp["columns"]]
             for row in resp["values"]:
-                results.append(dict(zip(cols, row)))
+                item = dict(zip(cols, row))
+                results_map[item["runbook_id"]] = item
     except Exception as e:
-        logger.error(f"Error searching runbooks: {e}")
-        # Fallback to standard search if ES|QL fails
-        try:
-            search_resp = await es.search(
-                index="runbooks-knowledge",
-                query={"multi_match": {"query": query_text, "fields": ["title", "content"]}}
-            )
-            for hit in search_resp["hits"]["hits"]:
-                results.append(hit["_source"])
-        except Exception as es_err:
-            logger.error(f"Fallback search also failed: {es_err}")
+        logger.error(f"ES|QL search failed: {e}")
+
+    # 2. Standard Search (Fuzzy/Multi-match) for higher recall
+    try:
+        search_resp = await es.search(
+            index="runbooks-knowledge",
+            query={
+                "multi_match": {
+                    "query": query_text,
+                    "fields": ["title^3", "content", "tags^2"],
+                    "fuzziness": "AUTO"
+                }
+            },
+            size=5
+        )
+        for hit in search_resp["hits"]["hits"]:
+            item = hit["_source"]
+            rid = item.get("runbook_id")
+            if rid not in results_map:
+                results_map[rid] = item
+    except Exception as es_err:
+        logger.error(f"Standard search failed: {es_err}")
             
-    return results
+    return list(results_map.values())
 
 def generate_action_id(incident_id: str, action: dict, sequence: int) -> str:
     """Generate a deterministic action ID for auditability across systems."""
