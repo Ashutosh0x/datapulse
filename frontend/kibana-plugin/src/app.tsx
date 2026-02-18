@@ -50,9 +50,11 @@ interface Incident {
     p99_latency_ms?: number;
   };
   analyst_report?: {
+    confidence?: number;
     timeline?: Array<{ timestamp?: string; ts?: string; event: string }>;
     hypotheses?: Array<{ cause: string; confidence?: number; description?: string }>;
     rcca?: {
+      confidence?: number;
       timeline?: Array<{ ts?: string; timestamp?: string; event: string }>;
       hypotheses?: Array<{ cause: string; confidence?: number; description?: string }>;
     };
@@ -136,11 +138,19 @@ const getImpactSummary = (incident: Incident | null): ImpactSummary | null => {
   if (!incident) return null;
 
   const hypotheses = incident?.analyst_report?.rcca?.hypotheses || incident?.analyst_report?.hypotheses || [];
-  const topConfidence = hypotheses.length
+  const hypothesisConfidence = hypotheses.length
     ? Math.max(...hypotheses.map((h) => Number(h?.confidence || 0)))
-    : 0;
+    : null;
+  const reportConfidence = Number(
+    incident?.analyst_report?.rcca?.confidence ?? incident?.analyst_report?.confidence ?? 0,
+  );
+  const topConfidence = hypothesisConfidence !== null ? hypothesisConfidence : reportConfidence;
 
-  const actions = incident.actions || incident.resolver_proposals || [];
+  const actions = incident.actions?.length
+    ? incident.actions
+    : incident.resolver_proposals?.length
+      ? incident.resolver_proposals
+      : [];
   const automatedSteps = actions.length;
 
   // Demo defaults for hackathon impact scoring.
