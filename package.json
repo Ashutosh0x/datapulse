@@ -4,7 +4,7 @@
     "private": true,
     "scripts": {
         "build": "cd frontend/kibana-plugin && npm install && npm run build",
-        "install": "cd frontend/kibana-plugin && npm install"
+        "install-frontend": "cd frontend/kibana-plugin && npm install"
     },
     "engines": {
         "node": ">=18.0.0"

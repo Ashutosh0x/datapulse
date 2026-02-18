@@ -1,31 +1,21 @@
 {
     "version": 2,
-    "builds": [
-        {
-            "src": "api/index.py",
-            "use": "@vercel/python",
-            "config": {
-                "runtime": "python3.11"
-            }
-        },
-        {
-            "src": "package.json",
-            "use": "@vercel/static-build",
-            "config": {
-                "distDir": "frontend/kibana-plugin/build",
-                "installCommand": "npm install && cd frontend/kibana-plugin && npm install",
-                "buildCommand": "cd frontend/kibana-plugin && npm run build"
-            }
-        }
-    ],
     "rewrites": [
         {
             "source": "/api/(.*)",
-            "destination": "api/index.py"
+            "destination": "/api/index.py"
+        },
+        {
+            "source": "/static/(.*)",
+            "destination": "/frontend/kibana-plugin/build/static/$1"
+        },
+        {
+            "source": "/(.*)\\.(js|css|png|jpg|svg|ico|json)",
+            "destination": "/frontend/kibana-plugin/build/$1.$2"
         },
         {
             "source": "/(.*)",
-            "destination": "package.json"
+            "destination": "/frontend/kibana-plugin/build/index.html"
         }
     ],
     "env": {
