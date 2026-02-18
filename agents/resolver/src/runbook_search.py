@@ -42,14 +42,18 @@ async def resolve_incident(incident_id: str, rcca_context: dict):
     await submit_proposals(incident_id, actions)
 
 async def search_runbooks(query_text: str):
-    # ES|QL Search or Text Search
-    # Using simple text search via ES|QL as per tool def, or standard search if needed for vectors
-    # Let's match the tool definition conceptually: FROM runbooks-knowledge...
+    """
+    Search for runbooks using ES|QL with basic sanitization.
+    Future: Integrate with Elastic Inference API for ELSER/Vector search.
+    """
+    # Basic sanitization for ES|QL
+    safe_query = query_text.replace('"', '\\"')
+    
     esql_query = f"""
     FROM runbooks-knowledge 
-    | WHERE MATCH(content, "{query_text}") 
-    | LIMIT 3 
-    | KEEP title, url, content
+    | WHERE MATCH(content, "{safe_query}") OR MATCH(title, "{safe_query}")
+    | LIMIT 5 
+    | KEEP title, url, content, runbook_id
     """
     results = []
     try:
@@ -60,6 +64,17 @@ async def search_runbooks(query_text: str):
                 results.append(dict(zip(cols, row)))
     except Exception as e:
         logger.error(f"Error searching runbooks: {e}")
+        # Fallback to standard search if ES|QL fails
+        try:
+            search_resp = await es.search(
+                index="runbooks-knowledge",
+                query={"multi_match": {"query": query_text, "fields": ["title", "content"]}}
+            )
+            for hit in search_resp["hits"]["hits"]:
+                results.append(hit["_source"])
+        except Exception as es_err:
+            logger.error(f"Fallback search also failed: {es_err}")
+            
     return results
 
 def generate_action_id(incident_id: str, action: dict, sequence: int) -> str:
@@ -72,32 +87,49 @@ def generate_action_id(incident_id: str, action: dict, sequence: int) -> str:
 
 def synthesize_actions(incident_id, runbooks, hypothesis):
     actions = []
+    cause = (hypothesis.get("cause") or "").lower()
+    description = (hypothesis.get("description") or "").lower()
     
-    # Heuristic based on hypothesis type
-    if "Deployment" in hypothesis.get("cause", ""):
+    # More robust heuristic based on keywords
+    if any(k in cause or k in description for k in ["deploy", "version", "rollout", "update"]):
         actions.append({
             "action_type": "rollback",
-            "title": "Rollback Deployment",
-            "description": "Rollback the service to the previous specific version.",
+            "title": "Rollback to Previous Version",
+            "description": "Perform an automated rollback to the last known-good container version.",
             "estimated_time": "5m",
-            "requires_approval": True
-        })
-    elif "Database" in hypothesis.get("cause", "") or "Connection" in hypothesis.get("description", ""):
-         actions.append({
-            "action_type": "scale_up",
-            "title": "Increase DB Connection Pool",
-            "description": "Update config map to increase pool size by 50%.",
-            "estimated_time": "2m",
-            "requires_approval": True
+            "requires_approval": True,
+            "risk_score": 0.2
         })
     
-    # Always attach runbook links
+    if any(k in cause or k in description for k in ["db", "database", "connection", "pool", "timeout"]):
+        actions.append({
+            "action_type": "scale_up",
+            "title": "Increase Connection Pool",
+            "description": "Increase the database connection pool size via ConfigMap update.",
+            "estimated_time": "2m",
+            "requires_approval": True,
+            "risk_score": 0.1
+        })
+
+    if any(k in cause or k in description for k in ["cpu", "memory", "load", "latency", "spike"]):
+        actions.append({
+            "action_type": "scale_out",
+            "title": "Horizontal Scale Out",
+            "description": "Increase replica count by 1 to handle traffic spike.",
+            "estimated_time": "3m",
+            "requires_approval": False, # Low risk for auto-approval
+            "risk_score": 0.05
+        })
+    
+    # Attach runbook links as informational actions
     for r in runbooks:
         actions.append({
             "action_type": "documentation",
-            "title": "Read Runbook: " + r.get("title", "Unknown"),
+            "title": f"Runbook: {r.get('title', 'Reference Guide')}",
+            "description": "Manual remediation guide from knowledge base.",
             "url": r.get("url"),
-            "requires_approval": False
+            "requires_approval": False,
+            "risk_score": 0.0
         })
         
     for idx, action in enumerate(actions):

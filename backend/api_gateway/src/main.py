@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 from enum import Enum
 
 from fastapi import FastAPI, HTTPException, Request, BackgroundTasks, Header
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 try:
     from elasticsearch import AsyncElasticsearch, NotFoundError
@@ -40,6 +41,15 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="DataPulse API Gateway", version="1.0.0", lifespan=lifespan)
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # For hackathon/demo purposes. Limit in production.
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 ES_HOST = os.getenv("ES_HOST", "http://elasticsearch:9200")
 es = AsyncElasticsearch(hosts=[ES_HOST])
@@ -613,9 +623,16 @@ async def get_incident_or_404(incident_id: str) -> Dict[str, Any]:
         resp = await es.get(index=INDEX_INCIDENTS, id=incident_id)
         return serialize_incident(resp["_source"], fallback_id=resp.get("_id"))
     except NotFoundError:
-        raise HTTPException(status_code=404, detail="Incident not found")
-    except Exception:
-        raise HTTPException(status_code=404, detail="Incident not found")
+        logger.bind(incident_id=incident_id).warning("Incident not found in Elasticsearch")
+        raise HTTPException(status_code=404, detail=f"Incident {incident_id} not found")
+    except Exception as e:
+        logger.error(f"Error retrieving incident {incident_id}: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error retrieving incident")
+
+
+@app.get("/api/datapulse/v1/incidents/{incident_id}")
+async def get_incident(incident_id: str):
+    return await get_incident_or_404(incident_id)
 
 
 async def transition_action(
