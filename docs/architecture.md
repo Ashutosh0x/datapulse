@@ -327,6 +327,32 @@ helm install datapulse ./infra/k8s/helm-chart \
 5. **Custom Agent Builder**: Full integration with Elastic Agent Builder API for tool registration
 6. **LangChain/OpenAI**: Enhanced hypothesis generation with GPT-4
 
+## Hackathon Execution Plan (Next Steps)
+
+### Phase 1: Elastic-native orchestration (highest priority)
+1. **Move remediation chaining to Elastic Workflows**
+   - Replace gateway-only step chaining with an explicit workflow: `approve -> jira -> slack -> execution`.
+   - Trigger that workflow from Resolver output so judges can see model + tool + workflow in one path.
+2. **Promote integrations to formal MCP servers**
+   - Convert Slack and Jira adapters to MCP-compatible tool servers.
+   - Let the Resolver discover tools dynamically at runtime instead of static Python wiring.
+
+### Phase 2: Multi-agent maturity
+3. **Add Agent-to-Agent handoff**
+   - Have Analyst produce a handoff payload consumed directly by Resolver.
+   - Preserve full handoff traces in `agent-audit-*` for demo transparency.
+
+### Phase 3: Measurable business impact (implemented in UI)
+4. **Impact metrics panel in command center**
+   - Show per-incident: time saved, RCA confidence, and automated steps.
+   - Keep scorecard visible beside incident analytics to support judging criteria.
+
+### Phase 4: Submission readiness
+5. **Deliverables checklist**
+   - Record a 3-minute demo with reasoning/tool invocation traces.
+   - Finalize a concise 400-word narrative focused on reliability and measured outcomes.
+   - Confirm OSS license and clear setup docs in the repo root.
+
 ## References
 
 - [Elastic Agent Builder Docs](https://www.elastic.co/guide/en/elasticsearch/reference/current/agent-builder.html)
