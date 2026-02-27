@@ -1,0 +1,33 @@
+{
+  "plugin_id": "ops_helper",
+  "tools": [
+    {
+      "name": "create_statuspage_incident",
+      "description": "Create a customer-facing status page incident",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "incident_id": { "type": "string" },
+          "service": { "type": "string" },
+          "impact": { "type": "string" }
+        },
+        "required": ["incident_id", "service", "impact"]
+      },
+      "responseText": "Status page incident created through ops_helper plugin."
+    },
+    {
+      "name": "schedule_maintenance_window",
+      "description": "Schedule a maintenance window after remediation approval",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "service": { "type": "string" },
+          "start_time": { "type": "string" },
+          "duration_minutes": { "type": "integer" }
+        },
+        "required": ["service", "start_time", "duration_minutes"]
+      },
+      "responseText": "Maintenance window scheduled through ops_helper plugin."
+    }
+  ]
+}

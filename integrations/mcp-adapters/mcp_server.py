@@ -1,11 +1,16 @@
-"""
-DataPulse MCP Server
-Exposes Slack and Jira tools via the Model Context Protocol (MCP).
-Allows Elastic Agent Builder to discover and invoke these tools dynamically.
+"""DataPulse MCP Server with plugin support.
+
+Exposes built-in Slack/Jira tools via the Model Context Protocol (MCP) and can
+load extra tools from lightweight JSON plugin manifests.
 """
 
 import asyncio
+import json
 import os
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
 from mcp.server.models import InitializationOptions
 from mcp.server import Notification, Server
 from mcp.server.stdio import stdio_server
@@ -22,12 +27,79 @@ from jira_adapter.jira_adapter import JiraAdapter
 slack = SlackAdapter()
 jira = JiraAdapter()
 
+
+@dataclass
+class PluginTool:
+    """Runtime representation of a plugin tool manifest entry."""
+
+    plugin_id: str
+    name: str
+    description: str
+    input_schema: dict[str, Any]
+    response_text: str
+
+
+PLUGIN_DIR = Path(os.getenv("MCP_PLUGIN_DIR", Path(__file__).parent / "plugins"))
+
+
+def _normalize_tool_name(tool_name: str) -> str:
+    return tool_name.strip().lower().replace(" ", "_")
+
+
+def load_plugin_tools() -> dict[str, PluginTool]:
+    """Load plugin tools from JSON manifests in the plugins directory."""
+    plugin_tools: dict[str, PluginTool] = {}
+
+    if not PLUGIN_DIR.exists():
+        logger.info(f"MCP plugin directory does not exist: {PLUGIN_DIR}")
+        return plugin_tools
+
+    for manifest_path in sorted(PLUGIN_DIR.glob("*.json")):
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            logger.warning(f"Skipping unreadable plugin manifest {manifest_path.name}: {exc}")
+            continue
+
+        plugin_id = manifest.get("plugin_id") or manifest_path.stem
+        tools = manifest.get("tools", [])
+
+        if not isinstance(tools, list) or not tools:
+            logger.warning(f"Plugin {plugin_id} has no tools and was skipped")
+            continue
+
+        for tool in tools:
+            tool_name = tool.get("name")
+            if not tool_name:
+                logger.warning(f"Plugin {plugin_id} has a tool with missing name")
+                continue
+
+            normalized_name = _normalize_tool_name(tool_name)
+            scoped_name = f"{plugin_id}.{normalized_name}"
+
+            plugin_tools[scoped_name] = PluginTool(
+                plugin_id=plugin_id,
+                name=scoped_name,
+                description=tool.get("description", f"{plugin_id} tool: {normalized_name}"),
+                input_schema=tool.get("inputSchema", {"type": "object", "properties": {}}),
+                response_text=tool.get(
+                    "responseText",
+                    f"Plugin tool {scoped_name} executed successfully.",
+                ),
+            )
+
+    logger.info(f"Loaded {len(plugin_tools)} plugin tools from {PLUGIN_DIR}")
+    return plugin_tools
+
+
+PLUGIN_TOOLS = load_plugin_tools()
+
 server = Server("datapulse-tools")
 
 @server.list_tools()
 async def handle_list_tools() -> list[types.Tool]:
     """List available incident response tools."""
-    return [
+    built_in_tools = [
         types.Tool(
             name="send_slack_alert",
             description="Send an incident alert to the #incident-alerts Slack channel.",
@@ -57,6 +129,17 @@ async def handle_list_tools() -> list[types.Tool]:
         ),
     ]
 
+    plugin_tools = [
+        types.Tool(
+            name=plugin_tool.name,
+            description=plugin_tool.description,
+            inputSchema=plugin_tool.input_schema,
+        )
+        for plugin_tool in PLUGIN_TOOLS.values()
+    ]
+
+    return built_in_tools + plugin_tools
+
 @server.call_tool()
 async def handle_call_tool(
     name: str, arguments: dict | None
@@ -74,6 +157,11 @@ async def handle_call_tool(
         logger.info(f"MCP Call: create_jira_ticket for {arguments['incident_id']}")
         key = await jira.create_incident_ticket(arguments)
         return [types.TextContent(type="text", text=f"Jira ticket created: {key}")]
+
+    elif name in PLUGIN_TOOLS:
+        plugin_tool = PLUGIN_TOOLS[name]
+        logger.info(f"MCP Call: plugin tool {name} from plugin {plugin_tool.plugin_id}")
+        return [types.TextContent(type="text", text=plugin_tool.response_text)]
 
     else:
         raise ValueError(f"Unknown tool: {name}")

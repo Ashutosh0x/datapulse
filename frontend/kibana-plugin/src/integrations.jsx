@@ -30,11 +30,13 @@ import {
     EuiLink,
     EuiDescriptionList,
     EuiHorizontalRule,
+    EuiCodeBlock,
 } from '@elastic/eui';
 
 export const IntegrationsApp = () => {
     const [slackFlyoutOpen, setSlackFlyoutOpen] = useState(false);
     const [jiraFlyoutOpen, setJiraFlyoutOpen] = useState(false);
+    const [mcpFlyoutOpen, setMcpFlyoutOpen] = useState(false);
 
     const integrations = [
         {
@@ -56,6 +58,16 @@ export const IntegrationsApp = () => {
             description: 'Automatic ticket creation and lifecycle sync',
             connectedBy: 'admin@elastic.co',
             connectedAt: '2 days ago',
+        },
+        {
+            id: 'mcp',
+            name: 'MCP Runtime',
+            icon: 'merge',
+            status: 'connected',
+            workspace: 'datapulse-tools',
+            description: 'Model Context Protocol tool discovery with plugin manifests',
+            connectedBy: 'platform@elastic.co',
+            connectedAt: 'just now',
         },
         {
             id: 'pagerduty',
@@ -471,6 +483,79 @@ export const IntegrationsApp = () => {
         </EuiFlyout>
     );
 
+    const McpFlyout = () => (
+        <EuiFlyout onClose={() => setMcpFlyoutOpen(false)} size="m">
+            <EuiFlyoutHeader hasBorder>
+                <EuiFlexGroup alignItems="center" gutterSize="m">
+                    <EuiFlexItem grow={false}>
+                        <EuiIcon type="merge" size="l" />
+                    </EuiFlexItem>
+                    <EuiFlexItem>
+                        <EuiTitle size="m">
+                            <h2>MCP & Plugin Runtime · DataPulse</h2>
+                        </EuiTitle>
+                    </EuiFlexItem>
+                </EuiFlexGroup>
+            </EuiFlyoutHeader>
+
+            <EuiFlyoutBody>
+                <EuiTitle size="xs"><h3>MCP Server Status</h3></EuiTitle>
+                <EuiSpacer size="m" />
+                <EuiDescriptionList
+                    listItems={[
+                        { title: 'Server', description: 'datapulse-tools' },
+                        { title: 'Transport', description: 'stdio' },
+                        { title: 'Status', description: <EuiHealth color="success">Running</EuiHealth> },
+                        { title: 'Built-in tools', description: 'send_slack_alert, create_jira_ticket' },
+                    ]}
+                />
+
+                <EuiSpacer size="l" />
+                <EuiHorizontalRule />
+                <EuiSpacer size="l" />
+
+                <EuiTitle size="xs"><h3>Plugin Discovery</h3></EuiTitle>
+                <EuiSpacer size="m" />
+                <EuiCallOut title="Loaded plugin namespace" color="primary" iconType="apps">
+                    <EuiText size="s">
+                        Plugins are discovered from <EuiCode>integrations/mcp-adapters/plugins/*.json</EuiCode> and exposed as namespaced tools.
+                    </EuiText>
+                    <EuiSpacer size="s" />
+                    <EuiBadge color="hollow">ops_helper.create_statuspage_incident</EuiBadge>
+                    <EuiSpacer size="s" />
+                    <EuiBadge color="hollow">ops_helper.schedule_maintenance_window</EuiBadge>
+                </EuiCallOut>
+
+                <EuiSpacer size="l" />
+                <EuiTitle size="xs"><h3>Sample Plugin Manifest</h3></EuiTitle>
+                <EuiSpacer size="m" />
+                <EuiCodeBlock language="json" isCopyable>
+{`{
+  "plugin_id": "ops_helper",
+  "tools": [
+    {
+      "name": "create_statuspage_incident",
+      "description": "Create a customer-facing status page incident"
+    }
+  ]
+}`}
+                </EuiCodeBlock>
+            </EuiFlyoutBody>
+
+            <EuiFlyoutFooter>
+                <EuiFlexGroup justifyContent="spaceBetween">
+                    <EuiFlexItem grow={false}>
+                        <EuiButton onClick={() => setMcpFlyoutOpen(false)}>Close</EuiButton>
+                    </EuiFlexItem>
+                    <EuiFlexItem grow={false}>
+                        <EuiButton fill iconType="refresh">Rescan Plugins</EuiButton>
+                    </EuiFlexItem>
+                </EuiFlexGroup>
+            </EuiFlyoutFooter>
+        </EuiFlyout>
+    );
+
+
     return (
         <>
             <div style={{ background: '#25262E', padding: '12px 16px', borderBottom: '1px solid #343741' }}>
@@ -521,6 +606,7 @@ export const IntegrationsApp = () => {
                                                         onClick={() => {
                                                             if (integration.id === 'slack') setSlackFlyoutOpen(true);
                                                             if (integration.id === 'jira') setJiraFlyoutOpen(true);
+                                                            if (integration.id === 'mcp') setMcpFlyoutOpen(true);
                                                         }}
                                                     >
                                                         Configure
@@ -580,8 +666,8 @@ export const IntegrationsApp = () => {
                                             <EuiIcon type="logoSlack" size="m" />
                                         </EuiFlexItem>
                                         <EuiFlexItem>
-                                            <EuiText size="s"><strong>2. Slack Alert</strong></EuiText>
-                                            <EuiText size="xs" color="subdued">Notify #data-pulse-incidents</EuiText>
+                                            <EuiText size="s"><strong>2. MCP Tool Selection</strong></EuiText>
+                                            <EuiText size="xs" color="subdued">Discover built-in + plugin tools</EuiText>
                                         </EuiFlexItem>
                                     </EuiFlexGroup>
                                 </EuiPanel>
@@ -598,8 +684,8 @@ export const IntegrationsApp = () => {
                                             <EuiIcon type="logoJira" size="m" />
                                         </EuiFlexItem>
                                         <EuiFlexItem>
-                                            <EuiText size="s"><strong>3. Jira Ticket</strong></EuiText>
-                                            <EuiText size="xs" color="subdued">Auto-create in OPS project</EuiText>
+                                            <EuiText size="s"><strong>3. Slack/Jira or Plugin Action</strong></EuiText>
+                                            <EuiText size="xs" color="subdued">Execute selected MCP tool</EuiText>
                                         </EuiFlexItem>
                                     </EuiFlexGroup>
                                 </EuiPanel>
@@ -653,6 +739,7 @@ export const IntegrationsApp = () => {
 
             {slackFlyoutOpen && <SlackFlyout />}
             {jiraFlyoutOpen && <JiraFlyout />}
+            {mcpFlyoutOpen && <McpFlyout />}
         </>
     );
 };
