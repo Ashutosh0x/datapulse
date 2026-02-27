@@ -1,5 +1,8 @@
 {
     "version": 2,
+    "installCommand": "npm install",
+    "buildCommand": "cd frontend/kibana-plugin && npm install --legacy-peer-deps && CI=false npm run build && cd ../.. && rm -rf public && cp -R frontend/kibana-plugin/build public",
+    "outputDirectory": "public",
     "functions": {
         "api/index.py": {
             "runtime": "@vercel/python"
