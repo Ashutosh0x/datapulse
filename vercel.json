@@ -1,14 +1,14 @@
 {
     "version": 2,
     "functions": {
-        "api/**/*.py": {
+        "backend/api_gateway/src/main.py": {
             "runtime": "@vercel/python"
         }
     },
     "rewrites": [
         {
             "source": "/api/(.*)",
-            "destination": "/api/index.py"
+            "destination": "/backend/api_gateway/src/main.py"
         },
         {
             "source": "/static/(.*)",

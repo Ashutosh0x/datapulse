@@ -8,6 +8,6 @@
         "seed": "python scripts/seed_runbooks.py"
     },
     "engines": {
-        "node": "24.x"
+        "node": "18.x"
     }
 }
