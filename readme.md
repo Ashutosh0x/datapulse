@@ -21,6 +21,7 @@ https://github.com/user-attachments/assets/514958f9-fac0-499f-921e-061b939ce70b
 - **Autonomous Investigation:** Uses Elastic's Agent Builder to conduct deep RCA (Root Cause Analysis) using real tool calls (logs, metrics, and traces).
 - **Remediation Strategies:** A specialized "Resolver" agent suggests actions (Rollbacks, Scaling, Config changes) based on observed failures.
 - **Multi-Channel Orchestration:** Bi-directional sync with **Slack** and **Jira**. Approve production changes directly from Slack buttons.
+- **MCP Plugin Runtime:** Extend Agent Builder tools with JSON plugin manifests loaded at MCP server startup.
 - **SRE Command Center:** A premium Kibana-integrated UI featuring real-time incident tracking, agent "thought logs," and personalized operational impact metrics.
 - **Security-First:** HMAC-verified Slack webhooks, RBAC visibility, and session management integrated out of the box.
 
@@ -87,10 +88,10 @@ DataPulse is built on a distributed agent architecture:
 ## Tech Stack
 
 - **Inference & AI:** Elastic Agent Builder, ES|QL, ELSER v2.
-- **Backend:** Python 3.10+, FastAPI, Loguru, Pydantic, Httpx.
-- **Frontend:** React, `@elastic/eui` (Elastic UI), LocalStorage persistence.
-- **Storage:** Elasticsearch 8.17+ (ILM, Search Templates, Vector Search).
-- **Infrastructure:** Docker Compose, Bash automation.
+-- **Backend:** Python 3.10+, FastAPI, Loguru, Pydantic, Httpx.
+-- **Frontend:** React, `@elastic/eui` (Elastic UI), LocalStorage persistence.
+-- **Storage:** Elasticsearch 8.17+ (ILM, Search Templates, Vector Search).
+-- **Infrastructure:** Docker Compose, Bash automation.
 
 ---
 
@@ -110,6 +111,7 @@ docker-compose up -d
 # 4. (Advanced) Run MCP Tool Server
 # Exposes Slack/Jira tools for Discovery by Elastic Agent Builder
 python integrations/mcp-adapters/mcp_server.py
+# Optional: add JSON plugin manifests in integrations/mcp-adapters/plugins/*.json
 ```
 
 Visit the UI at `http://localhost:3000` (or within your Kibana custom app frame).
@@ -130,5 +132,3 @@ For full setup guides, agent configuration, and integration tutorials, see:
 - [ ] Multi-region incident correlation.
 
 *Built for the Elastic Hackathon 2026.*
-
-
